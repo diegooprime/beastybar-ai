@@ -97,6 +97,12 @@ pub fn deal(seed: u64, i: u32) -> State {
     State::deal(&mut Rng::new(derive_seed(seed, &[DEAL, i as u64])), (i % 2) as u8)
 }
 
+/// The RNG of `seat` in game `g` (0: A in seat 0, 1: seats swapped) of deal `i` of a match with `seed`: it builds
+/// that seat's views and is its agent's RNG. `VecEnv::reset_arena` seats agents with the same RNGs.
+pub fn seat_rng(seed: u64, i: u32, g: u8, seat: u8) -> Rng {
+    Rng::new(derive_seed(seed, &[GAME, i as u64, g as u64, seat as u64]))
+}
+
 /// Plays one game from `state`. `agents[s]` and `rngs[s]` belong to seat s; `oracle[s]` seats get the true state,
 /// the others only `view(state, s, rng)`. Returns the final state and every action.
 pub fn play_game(
@@ -152,9 +158,7 @@ pub fn play_match(
                     let start = deal(seed, i);
                     let mut pair = Vec::with_capacity(2);
                     for g in 0..2u8 {
-                        let mut rngs: [Rng; 2] = std::array::from_fn(|s| {
-                            Rng::new(derive_seed(seed, &[GAME, i as u64, g as u64, s as u64]))
-                        });
+                        let mut rngs: [Rng; 2] = std::array::from_fn(|s| seat_rng(seed, i, g, s as u8));
                         let (agents, oracle): ([&mut dyn Agent; 2], _) = if g == 0 {
                             ([agent_a.as_mut(), agent_b.as_mut()], [a.is_oracle(), b.is_oracle()])
                         } else {

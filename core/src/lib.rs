@@ -9,6 +9,7 @@ pub mod agents;
 pub mod animal;
 pub mod arena;
 pub mod env;
+pub mod env_act;
 pub mod eval;
 pub mod features;
 pub mod rng;
