@@ -8,6 +8,8 @@
 #   scripts/pod.sh ssh ID [CMD...]       run a command in the repo dir (interactive shell without CMD)
 #   scripts/pod.sh bg ID NAME CMD...     run CMD detached; log at runs/NAME.log on the pod
 #   scripts/pod.sh pull ID PATH          rsync PATH (relative to repo) back from the pod
+#   scripts/pod.sh backup ID             pull data/, checkpoints/ and runs/ into backups/<pod id>/ (no deletes): pods
+#                                        can vanish (e.g. when the account balance runs out), so back up often
 #   scripts/pod.sh push ID PATH          rsync PATH (relative to repo) to the pod (e.g. a checkpoint: sync skips them)
 #   scripts/pod.sh down ID               delete the pod
 set -euo pipefail
@@ -106,6 +108,14 @@ except Exception: pass' 2>/dev/null || true)
     read -r host port < <(target "$id")
     rsh "$id" "mkdir -p $REMOTE/$(dirname "$path")"
     rsync -az -e "ssh ${SSH_OPTS[*]} -p $port" "$REPO/$path" "$host:$REMOTE/$(dirname "$path")/" ;;
+  backup)
+    id=$1
+    read -r host port < <(target "$id")
+    mkdir -p "$REPO/backups/$id"
+    for d in data checkpoints runs; do
+      rsync -az -e "ssh ${SSH_OPTS[*]} -p $port" --exclude '*.tmp.npz' "$host:$REMOTE/$d" "$REPO/backups/$id/" 2>/dev/null || true
+    done
+    du -sh "$REPO/backups/$id" ;;
   down)
     runpodctl pod delete "$1" ;;
   *)

@@ -32,3 +32,6 @@ REVISION
 
 # parallel work trees
 .worktrees/
+
+# pod backups (scripts/pod.sh backup)
+backups/
