@@ -285,4 +285,10 @@ fn play_match<'py>(
 mod _core {
     #[pymodule_export]
     use super::{Game, arena_deal, bench, build_id, parse_spec, play_match};
+
+    /// Training bindings (VecEnv, observation layout): `python_env.rs`.
+    #[pymodule_init]
+    fn init(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
+        crate::python_env::register(m)
+    }
 }

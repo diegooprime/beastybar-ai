@@ -8,7 +8,9 @@ pub mod action;
 pub mod agents;
 pub mod animal;
 pub mod arena;
+pub mod env;
 pub mod eval;
+pub mod features;
 pub mod rng;
 pub mod search;
 mod state;
@@ -16,6 +18,8 @@ pub mod view;
 
 #[cfg(feature = "pyo3")]
 mod python;
+#[cfg(feature = "pyo3")]
+mod python_env;
 
 /// Fingerprint of the sources this crate was compiled from (core/build.rs; bbar/provenance.py checks it).
 pub const BUILD_ID: &str = env!("BBAR_BUILD_ID");
