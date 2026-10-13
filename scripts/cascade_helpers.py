@@ -89,9 +89,12 @@ def main():
     ap.add_argument("--exact-dir", default="data/value/x9")
     ap.add_argument("--into", default="data/value/v3", help="hub DATA directory that receives the exact shards")
     ap.add_argument("--skip-current", action="store_true", help="wait for the hub's next level")
+    ap.add_argument("--attach", action="store_true",
+                    help="the helpers already run the hub's current level: only collect and copy their shards")
     a = ap.parse_args()
     workers = a.workers or [4] * len(a.helpers)
     seen = level_line(a.hub, a.log) if a.skip_current else None
+    attach = a.attach
     while True:
         line = level_line(a.hub, a.log)
         if line and line != seen:
@@ -106,11 +109,15 @@ def main():
             rsync(net, str(local_net), "src", a.hub)
             t0 = time.time()
             for k, (pod, w) in enumerate(zip(a.helpers, workers), start=1):
+                if attach:
+                    continue
                 ssh(pod, f"mkdir -p {Path(net).parent}")
                 rsync(str(local_net), net, "dst", pod)
+                if attach:
+                    continue   # --attach: the helpers already run this level; only collect their shards
                 cmd = helper_command(line, 1000 + 100 * k + int(t0) % 100, a.minutes, w)
-                ssh(pod, f"mkdir -p runs && nohup bash -c {shlex.quote(cmd)} > runs/helper-{Path(outdir).name}.log "
-                         f"2>&1 &")
+                # pod.sh bg detaches the job properly (a plain `ssh ... nohup ... &` can keep the session open)
+                sh(POD, "bg", pod, f"helper-{Path(outdir).name}", cmd)
                 print(f"  helper {pod}: started ({w} workers)", flush=True)
             # wait for the helpers to finish (they stop after --minutes plus the batch in flight)
             deadline = t0 + 60 * (a.minutes + 8)
@@ -134,6 +141,7 @@ def main():
                 rsync(a.exact_dir + "/", str(local_x) + "/", "src", a.exact)
                 rsync(str(local_x) + "/", a.into + "/", "dst", a.hub)
                 print(f"  copied {len(list(local_x.glob('*.npz')))} exact shards into the hub's {a.into}", flush=True)
+            attach = False
         time.sleep(60)
 
 
