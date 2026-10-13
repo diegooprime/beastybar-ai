@@ -49,3 +49,22 @@ More compute buys strength through: CFR iterations, search depth, value-net data
   realistic ranges; E2 = can a value net trained on exact labels replace exact solving at ply 10-11. Decides how much
   to invest in the value-net machinery.
 - M4 Value net + continual re-solving; M5 self-play rounds + exploiter suite; M6 scaling curves.
+
+## Status and learnings (2026-10-13)
+
+- M0, M1, M2 done; E1 done for the blueprint; E2 done at small scale; M4 code done (`bbar/resolve.py`,
+  `bbar/value/cascade.py`), not yet measured with a real value net.
+- Exact windows are much cheaper than estimated (ply 10: ~0.4 s, ply 9: 1-5 s, ply 8: ~2 min, 3 GB), so F = 10 is
+  cheap at play time and F = 9 affordable; only plies 0-8 need the value net.
+- The blueprint is exploitable late (exact best response from ply 9: 0.111) while a PPO exploiter finds 0.022:
+  learned exploiters badly understate the worst case. Exact per-ply best responses (`bbar.delta`) are the headline
+  lower bounds.
+- Value-net error is the bottleneck: 0.070 / 0.063 / 0.057 held-out at 62k / 139k / 253k public states (slow
+  slope); option features cut it another 5-7%. Even so, depth-1 solving with network leaves from ply 10 is 0.020
+  exploitable against the blueprint's 0.100. Depth-2 trees query beliefs unlike the training ranges (leaf error
+  0.11): `bbar/value/harvest.py` labels the beliefs solves actually query (DAgger).
+- Next, in order: regenerate labels (single range per state, Bayes ranges, harvested queries, PBS v2); train;
+  measure the resolve player (delta_T at T = 9, 8; matches vs blueprint, PIMC d=8, tail); run the cascade toward
+  ply 0; iterate harvest/train. Back up pods continuously (`scripts/pod.sh autobackup`): a balance outage lost
+  ~500k labels.
+
