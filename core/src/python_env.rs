@@ -1,6 +1,6 @@
 //! Python bindings for training: `bbar._core.VecEnv`, the observation layout, `encode_moves` and `env_bench`.
 //! Registered from the module init in `python.rs`. Built-in agents acting in a VecEnv (`VecEnv.act`,
-//! `VecEnv.uniforms`, `VecEnv.reset_arena`): `core/src/env_act.rs`.
+//! `VecEnv.uniforms`, `VecEnv.reset_arena`) and Python agents' views (`VecEnv.views`): `core/src/env_act.rs`.
 //!
 //! Arrays come back as numpy arrays over fresh `bytearray`s that Rust fills in place with the GIL released (no
 //! copy after encoding). Array arguments are anything `numpy.ascontiguousarray` accepts.
@@ -23,6 +23,7 @@ use crate::env::{self, VecEnv};
 use crate::features::{
     self, History, MAX_PLIES, OBS_DIM, OBS_LAYOUT, OBS_VERSION, PRIV_DIM, encode_mask, encode_obs, encode_privileged,
 };
+use crate::python::Game;
 use crate::state::{DECK_CAP, State};
 
 /// A zeroed bytearray of `len` elements of `T`.
@@ -333,6 +334,32 @@ impl PyVecEnv {
             *o = a as i64;
         }
         ndarray(&buf, "int64", &[k])
+    }
+
+    /// For agents written in Python (bbar/match.py): `(games, histories, seeds, uniforms)` for the player to move in
+    /// each env of `envs` (distinct indices). `uniforms[j]` (float64) is one draw from that seat's agent RNG, exactly
+    /// the draw `uniforms` gives a network there (the seat RNG advances by one draw per decision, as for a network);
+    /// `games[j]` is a Game holding that player's view, built as for a built-in agent (the player's own hand and
+    /// everything public are true, the opponent's hand and every deck order are a random guess), and `seeds[j]`
+    /// (uint64) a seed for the agent's own private random stream, both from a stream derived from that draw;
+    /// `histories[j]` lists every action played so far. Nothing is played: pass the actions to `step`.
+    fn views<'py>(&mut self, py: Python<'py>, envs: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let envs = env_indices(envs, self.env.len())?;
+        let got = self.env.views(&envs).map_err(PyValueError::new_err)?;
+        let games: Vec<Game> = got.iter().map(|d| Game { state: d.view }).collect();
+        let hists: Vec<Vec<u32>> = got.iter().map(|d| d.history.iter().map(|&a| a as u32).collect()).collect();
+        let seeds = zeroed::<u64>(py, got.len())?;
+        for (o, d) in unsafe { slice_mut::<u64>(&seeds)? }.iter_mut().zip(&got) {
+            *o = d.seed;
+        }
+        let uniforms = zeroed::<f64>(py, got.len())?;
+        for (o, d) in unsafe { slice_mut::<f64>(&uniforms)? }.iter_mut().zip(&got) {
+            *o = d.uniform;
+        }
+        let (seeds, uniforms) =
+            (ndarray(&seeds, "uint64", &[got.len()])?, ndarray(&uniforms, "float64", &[got.len()])?);
+        let out = (games, hists, seeds, uniforms);
+        Ok(out.into_pyobject(py)?.into_any())
     }
 
     /// float64 [k]: one uniform draw in [0, 1) from the agent RNG of the player to move in each env of `envs`: the
