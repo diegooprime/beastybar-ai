@@ -15,6 +15,10 @@
 //!   mover hand by the perfect-information solver), or public nodes (both decks empty; one exact value), or
 //!   nothing else (the whole game to the end, for small variants).
 //!
+//! - **Value leaves** (optional, [`Window::build_cut`]): every other node at a given depth below the root (ply `L`
+//!   of the game) ends the window too. Their values come from outside, every half-iteration (see *Depth-limited
+//!   solving* below).
+//!
 //! Information sets are merged by (public node, current hand), which is lossless: draws depend only on the current
 //! hand, payoffs only on public information, and the hands are independent (see `tests/hidden_info.rs` and the
 //! explicit-infoset cross-check `bbar/xcfr.py`). Values are win probabilities (win 1, draw .5, loss 0); `u` below is
@@ -41,6 +45,36 @@
 //! opponent best-response cfvs do not exceed the given ones (up to the gadget's exploitability). At a leaf root
 //! (no decisions of ours) the gadget is solved exactly without iterations: each opponent hand takes the better of
 //! its fixed follow value and its terminate value.
+//!
+//! # Depth-limited solving (external leaf values)
+//! With value leaves, the window is the trunk of a depth-limited solve (CFR-D, Burch et al. 2014; DeepStack;
+//! ReBeL). A value leaf's payoff is given per hand by a *value function* of the public belief state there: for each
+//! player `p` and hand `h`, `v_p(h)` = `p`'s win probability holding `h` (the owner's value, not player 0's), against
+//! the opponent's belief. The leaf cfv of player `i` is `v_i(h) * m_o`, `m_o` the opponent's reach mass at the leaf
+//! (`cfv_i(h) = sum_h' r_o(h') u_i(h, h') = m_o sum_h' b_o(h') u_i(h, h')`).
+//!
+//! [`Cfr::ext_begin`] / [`Cfr::ext_end`] run one *half-iteration* (the updates alternate between the players, as in
+//! [`Cfr::iterate`]): `ext_begin` computes the current strategies (regret matching), both players' reaches at every
+//! value leaf and returns the beliefs (normalised reaches; uniform over the feasible hands when a player's mass is 0)
+//! and masses; the caller evaluates the value function at those beliefs; `ext_end` takes the values of both players
+//! and updates the regrets and the average strategy of the player whose half-iteration it is.
+//!
+//! **Which policy defines the leaf beliefs: the current iterate.** This is CFR-D (Burch et al. 2014) and DeepStack's
+//! depth-limited lookahead: on every iteration the leaf PBS is the one the iterate induces, and the leaf values are
+//! the (approximate) subgame-equilibrium values for it. With an exact oracle, each iterate is then a full-game
+//! strategy (trunk iterate + subgame play) and the trunk regrets are regrets in the full game, so the average trunk
+//! strategy converges to the trunk of an equilibrium; that is the guarantee behind re-solving. The leaf values react
+//! to the trunk strategy through the beliefs, so this converges more slowly than CFR on a fixed tree (about
+//! `1/sqrt(T)` on hard positions). ReBeL's CFR-AVG takes the leaf PBS of the *average* policy instead; tried on a slow
+//! position (golden game 1, ply 11, leaves at 12, oracle values, 100 iterations) it gave a better trunk but a worse
+//! re-solved composite (3.3e-4 against 2.2e-4), so the iterate it is.
+//!
+//! **What a re-solve below a leaf needs.** In `p`'s half-iteration the values the caller returns for the *other*
+//! player `o` are `o`'s values against `p`'s implicit subgame strategy for that iterate. [`Cfr::avg_leaf_values`]
+//! averages them with the weights of `p`'s average strategy (`w_t * m_p^t`): `o`'s values against `p`'s average
+//! (trunk plus implicit subgame) strategy, in units where `p`'s reach at the leaf sums to 1 — upper bounds of
+//! `o`'s best-response values there (a best response to a mixture gains at most the mixture of best responses), so
+//! the re-solving gadget at the leaf with these opponent cfvs and `p`'s average belief is feasible and safe.
 //!
 //! # Layout and determinism
 //! Internal nodes are stored in preorder, so a subtree is a contiguous range of nodes and of strategy entries
@@ -201,6 +235,8 @@ pub enum Child {
     Terminal(f64),
     /// Frontier (or public) leaf: index into [`Window::frontier`].
     Frontier(u32),
+    /// Value leaf (depth-limited window): index into [`Window::value_leaves`]; values from outside.
+    Value(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -217,6 +253,22 @@ pub struct FrontierLeaf {
     pub mover: u8,
     pub off: u32,
     pub n: u32,
+}
+
+/// A value leaf: a non-terminal, non-frontier node at the cut depth. External values of player `p` (per hand of
+/// `p` at the leaf, local layout) live at `off[p]..off[p] + n[p]` of a leaf-values buffer of length
+/// [`Window::n_leaf_values`].
+#[derive(Clone, Copy, Debug)]
+pub struct ValueLeaf {
+    /// The public position.
+    pub state: State,
+    /// Parent node and the action that led here.
+    pub parent: u32,
+    pub action: u8,
+    pub mover: u8,
+    pub hs: [u32; 2],
+    pub off: [u32; 2],
+    pub n: [u32; 2],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -245,6 +297,8 @@ pub struct WindowStats {
     /// Frontier (or public) leaves of the tree, and distinct frontier positions (solved once each).
     pub frontier_leaves: usize,
     pub frontier_positions: usize,
+    /// Value leaves (depth-limited windows; 0 otherwise).
+    pub value_leaves: usize,
     pub max_depth: usize,
     /// Perfect-information search nodes spent on frontier values.
     pub pi_nodes: u64,
@@ -277,6 +331,11 @@ pub struct Window {
     pub frontier: Vec<FrontierLeaf>,
     pub frontier_states: Vec<State>,
     pub values: Vec<f64>,
+    /// Depth (moves below the root) at which value leaves cut the tree, if any.
+    pub cut: Option<usize>,
+    pub value_leaves: Vec<ValueLeaf>,
+    /// Length of a leaf-values (or leaf-reaches) buffer: both players' hands at every value leaf.
+    pub n_leaf_values: usize,
     pub n_entries: usize,
     pub stats: WindowStats,
     scratch_len: usize,
@@ -295,6 +354,9 @@ struct Builder {
     fr_index: HashMap<u64, u32>,
     frontier_states: Vec<State>,
     n_values: usize,
+    cut: Option<usize>,
+    value_leaves: Vec<ValueLeaf>,
+    n_leaf_values: usize,
     n_entries: usize,
     terminal_leaves: usize,
     frontier_leaves: usize,
@@ -358,6 +420,16 @@ impl Builder {
         if self.is_leaf(&s) {
             self.frontier_leaves += 1;
             return Ok(Child::Frontier(self.frontier_id(&s)));
+        }
+        if self.cut == Some(depth) {
+            let u = [unplayed(&s, 0), unplayed(&s, 1)];
+            let hs = [self.handset(u[0]), self.handset(u[1])];
+            let n = hs.map(|h| self.handsets[h as usize].masks.len() as u32);
+            let off = [self.n_leaf_values as u32, (self.n_leaf_values + n[0] as usize) as u32];
+            self.n_leaf_values += (n[0] + n[1]) as usize;
+            let i = self.value_leaves.len() as u32;
+            self.value_leaves.push(ValueLeaf { state: s, parent, action, mover: s.to_move, hs, off, n });
+            return Ok(Child::Value(i));
         }
         self.max_depth = self.max_depth.max(depth);
         let id = self.nodes.len() as u32;
@@ -488,8 +560,24 @@ impl Window {
     /// Builds the window below `root` (a real or public position) for hand size `k`. `threads` parallelises the
     /// frontier values (exact integers, so the result does not depend on it).
     pub fn build(root: &State, k: usize, leaves: Leaves, threads: usize) -> Result<Window, String> {
+        Window::build_cut(root, k, leaves, None, threads)
+    }
+
+    /// [`Window::build`] with value leaves: every node `cut` moves below the root that is neither over nor a
+    /// `leaves` leaf ends the window as a value leaf (depth-limited solving: values from outside, see the module
+    /// documentation). `cut` must be at least 1.
+    pub fn build_cut(
+        root: &State,
+        k: usize,
+        leaves: Leaves,
+        cut: Option<usize>,
+        threads: usize,
+    ) -> Result<Window, String> {
         if k == 0 {
             return Err("hand size k must be at least 1".into());
+        }
+        if cut == Some(0) {
+            return Err("the cut depth must be at least 1 (the root cannot be a value leaf)".into());
         }
         for p in 0..2 {
             if root.deck_len[p] > 0 && root.hands[p].count_ones() as usize != k {
@@ -514,6 +602,9 @@ impl Window {
             fr_index: HashMap::new(),
             frontier_states: Vec::new(),
             n_values: 0,
+            cut,
+            value_leaves: Vec::new(),
+            n_leaf_values: 0,
             n_entries: 0,
             terminal_leaves: 0,
             frontier_leaves: 0,
@@ -533,6 +624,7 @@ impl Window {
             terminal_leaves: b.terminal_leaves,
             frontier_leaves: b.frontier_leaves,
             frontier_positions: b.frontier.len(),
+            value_leaves: b.value_leaves.len(),
             max_depth: b.max_depth,
             pi_nodes,
             tree_seconds,
@@ -551,6 +643,9 @@ impl Window {
             frontier: b.frontier,
             frontier_states: b.frontier_states,
             values,
+            cut,
+            value_leaves: b.value_leaves,
+            n_leaf_values: b.n_leaf_values,
             n_entries: b.n_entries,
             stats,
             scratch_len: (b.max_depth + 2) * (b.max_need + 3 * nmax) + 16,
@@ -648,11 +743,21 @@ impl Window {
     }
 
     /// Counterfactual values at a leaf for player `i`, given the opponent's reach `ro` at the leaf.
-    /// `out` is over `i`'s hands at the leaf.
+    /// `out` is over `i`'s hands at the leaf. `ext`: the leaf-values buffer for value leaves (owner's values; may be
+    /// empty when the window has none).
     #[inline]
-    fn leaf_cfv(&self, i: usize, leaf: Child, ro: &[f64], out: &mut [f64]) {
+    fn leaf_cfv(&self, i: usize, leaf: Child, ro: &[f64], ext: &[f64], out: &mut [f64]) {
         let ui = |u: f64| if i == 0 { u } else { 1.0 - u };
         match leaf {
+            Child::Value(j) => {
+                assert!(ext.len() == self.n_leaf_values, "value leaves need external values");
+                let leaf = &self.value_leaves[j as usize];
+                let vals = &ext[leaf.off[i] as usize..][..leaf.n[i] as usize];
+                let tot: f64 = ro.iter().sum();
+                for (o, &v) in out.iter_mut().zip(vals) {
+                    *o = v * tot;
+                }
+            }
             Child::Terminal(u) => {
                 let tot: f64 = ro.iter().sum();
                 out.fill(ui(u) * tot);
@@ -688,16 +793,29 @@ impl Window {
         follow: bool,
         threads: usize,
     ) -> (Vec<f64>, Vec<f64>) {
+        self.root_cfvs_ext(i, profile, ro, follow, &[], threads)
+    }
+
+    /// [`Window::root_cfvs`] with fixed value-leaf values `ext` (a leaf-values buffer; empty without value leaves).
+    pub fn root_cfvs_ext(
+        &self,
+        i: usize,
+        profile: &[f64],
+        ro: &[f64],
+        follow: bool,
+        ext: &[f64],
+        threads: usize,
+    ) -> (Vec<f64>, Vec<f64>) {
         let nh = self.root_hands(i).len();
         let (mut best, mut fol) = (vec![0.0; nh], vec![0.0; nh]);
         match self.root {
             Child::Node(r) => {
-                let ctx = EvalCtx { w: self, prof: profile, i, follow, par_min: self.par_min(threads) };
+                let ctx = EvalCtx { w: self, prof: profile, i, follow, ext, par_min: self.par_min(threads) };
                 let mut scratch = vec![0.0; self.scratch_len];
                 ctx.walk(r as usize, ro, &mut best, &mut fol, &mut scratch);
             }
             leaf => {
-                self.leaf_cfv(i, leaf, ro, &mut best);
+                self.leaf_cfv(i, leaf, ro, ext, &mut best);
                 fol.copy_from_slice(&best);
             }
         }
@@ -707,15 +825,30 @@ impl Window {
     /// A pure best response of player `i` to `profile` (opponent root reach `ro`): `profile` with `i`'s entries
     /// replaced by the first best action of each (node, hand). Its value is the best-response value.
     pub fn best_response(&self, i: usize, profile: &[f64], ro: &[f64]) -> Vec<f64> {
+        self.best_response_ext(i, profile, ro, &[])
+    }
+
+    /// [`Window::best_response`] with fixed value-leaf values `ext`.
+    pub fn best_response_ext(&self, i: usize, profile: &[f64], ro: &[f64], ext: &[f64]) -> Vec<f64> {
         let mut out = profile.to_vec();
         if let Child::Node(r) = self.root {
             let mut cfv = vec![0.0; self.root_hands(i).len()];
-            self.br_record(i, profile, r as usize, ro, &mut cfv, &mut out);
+            self.br_record(i, profile, r as usize, ro, ext, &mut cfv, &mut out);
         }
         out
     }
 
-    fn br_record(&self, i: usize, prof: &[f64], n: usize, ro: &[f64], out: &mut [f64], table: &mut [f64]) {
+    #[allow(clippy::too_many_arguments)]
+    fn br_record(
+        &self,
+        i: usize,
+        prof: &[f64],
+        n: usize,
+        ro: &[f64],
+        ext: &[f64],
+        out: &mut [f64],
+        table: &mut [f64],
+    ) {
         let node = &self.nodes[n];
         let ne = node.n_edges as usize;
         let edges = self.node_edges(n);
@@ -727,8 +860,8 @@ impl Window {
                 let tr = &self.trans[edge.trans as usize];
                 let mut c = vec![0.0; tr.to_n];
                 match edge.child {
-                    Child::Node(ch) => self.br_record(i, prof, ch as usize, ro, &mut c, table),
-                    leaf => self.leaf_cfv(i, leaf, ro, &mut c),
+                    Child::Node(ch) => self.br_record(i, prof, ch as usize, ro, ext, &mut c, table),
+                    leaf => self.leaf_cfv(i, leaf, ro, ext, &mut c),
                 }
                 tr.pull(&c, |h, v| q[h * ne + e] = v);
             }
@@ -752,8 +885,8 @@ impl Window {
                 tr.push(|h| ro[h] * prof[node.entry + h * ne + e], &mut cro);
                 let mut c = vec![0.0; out.len()];
                 match edge.child {
-                    Child::Node(ch) => self.br_record(i, prof, ch as usize, &cro, &mut c, table),
-                    leaf => self.leaf_cfv(i, leaf, &cro, &mut c),
+                    Child::Node(ch) => self.br_record(i, prof, ch as usize, &cro, ext, &mut c, table),
+                    leaf => self.leaf_cfv(i, leaf, &cro, ext, &mut c),
                 }
                 for (o, x) in out.iter_mut().zip(&c) {
                     *o += x;
@@ -771,10 +904,22 @@ impl Window {
         with_value: bool,
         threads: usize,
     ) -> Expl {
+        self.exploitability_ext(profile, ranges, with_value, &[], threads)
+    }
+
+    /// [`Window::exploitability`] in the depth-limited game whose value leaves pay the fixed values `ext`.
+    pub fn exploitability_ext(
+        &self,
+        profile: &[f64],
+        ranges: &[Vec<f64>; 2],
+        with_value: bool,
+        ext: &[f64],
+        threads: usize,
+    ) -> Expl {
         let r = [normalize(&ranges[0]), normalize(&ranges[1])];
         let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
-        let (b0, f0) = self.root_cfvs(0, profile, &r[1], with_value, threads);
-        let (b1, _) = self.root_cfvs(1, profile, &r[0], false, threads);
+        let (b0, f0) = self.root_cfvs_ext(0, profile, &r[1], with_value, ext, threads);
+        let (b1, _) = self.root_cfvs_ext(1, profile, &r[0], false, ext, threads);
         let br = [dot(&r[0], &b0), dot(&r[1], &b1)];
         let nashconv = br[0] + br[1] - 1.0;
         Expl {
@@ -783,6 +928,115 @@ impl Window {
             nashconv,
             exploitability: nashconv / 2.0,
         }
+    }
+}
+
+impl Window {
+    /// Public actions from the root to value leaf `j`.
+    pub fn leaf_history(&self, j: usize) -> Vec<u8> {
+        let leaf = &self.value_leaves[j];
+        let mut h = self.history(leaf.parent as usize);
+        h.push(leaf.action);
+        h
+    }
+
+    /// Possible hands of `player` at value leaf `j` (local layout).
+    pub fn leaf_hands(&self, j: usize, player: usize) -> &[u16] {
+        &self.handsets[self.value_leaves[j].hs[player] as usize].masks
+    }
+
+    /// Both players' reaches at every value leaf under `profile` from the root `ranges` (as given, not
+    /// normalised): the root range times the player's own action probabilities and draws (leaf-values layout).
+    pub fn leaf_reaches(&self, profile: &[f64], ranges: &[Vec<f64>; 2]) -> Vec<f64> {
+        let mut out = vec![0.0; self.n_leaf_values];
+        if let Child::Node(r) = self.root {
+            self.reach_rec(profile, r as usize, [&ranges[0], &ranges[1]], &mut out);
+        }
+        out
+    }
+
+    fn reach_rec(&self, prof: &[f64], n: usize, r: [&[f64]; 2], out: &mut [f64]) {
+        let node = &self.nodes[n];
+        let p = node.mover as usize;
+        let ne = node.n_edges as usize;
+        for (e, edge) in self.node_edges(n).iter().enumerate() {
+            if matches!(edge.child, Child::Terminal(_) | Child::Frontier(_)) {
+                continue;
+            }
+            let tr = &self.trans[edge.trans as usize];
+            let mut rp = vec![0.0; tr.to_n];
+            tr.push(|h| r[p][h] * prof[node.entry + h * ne + e], &mut rp);
+            let mut cr = r;
+            cr[p] = &rp;
+            match edge.child {
+                Child::Node(c) => self.reach_rec(prof, c as usize, cr, out),
+                Child::Value(j) => {
+                    let leaf = &self.value_leaves[j as usize];
+                    for q in 0..2 {
+                        out[leaf.off[q] as usize..][..leaf.n[q] as usize].copy_from_slice(cr[q]);
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Copies the profile `src_prof` of window `src` into `dest` (a profile of `self`): `src`'s internal node
+    /// `src_at` sits at internal node `at` of `self`, and below them every node of either window must be the node of
+    /// the other with the same history (same public position, actions and hands) and leaves must agree, except that
+    /// a value leaf of either window may be an internal node of the other (nothing below it is copied). Entries of
+    /// the common nodes are copied. This assembles a full-window profile from a depth-limited trunk and re-solved
+    /// leaf subtrees, and extracts a trunk or a subtree from a full profile. Returns the number of entries copied.
+    pub fn embed(
+        &self,
+        dest: &mut [f64],
+        src: &Window,
+        src_prof: &[f64],
+        at: usize,
+        src_at: usize,
+    ) -> Result<usize, String> {
+        if dest.len() != self.n_entries || src_prof.len() != src.n_entries {
+            return Err("profile lengths do not match the windows".into());
+        }
+        if at >= self.nodes.len() || src_at >= src.nodes.len() {
+            return Err("no such internal node".into());
+        }
+        self.embed_rec(dest, src, src_prof, at, src_at)
+    }
+
+    fn embed_rec(
+        &self,
+        dest: &mut [f64],
+        src: &Window,
+        sp: &[f64],
+        m: usize,
+        n: usize,
+    ) -> Result<usize, String> {
+        let (a, b) = (&self.nodes[m], &src.nodes[n]);
+        let nh = self.node_hands(m, a.mover as usize).len();
+        if key(&a.state) != key(&b.state)
+            || a.n_edges != b.n_edges
+            || nh != src.node_hands(n, b.mover as usize).len()
+        {
+            return Err(format!("node {n} of the source is not node {m} of the target"));
+        }
+        let len = nh * a.n_edges as usize;
+        dest[a.entry..a.entry + len].copy_from_slice(&sp[b.entry..b.entry + len]);
+        let mut count = len;
+        for (ea, eb) in self.node_edges(m).iter().zip(src.node_edges(n)) {
+            if ea.action != eb.action {
+                return Err(format!("actions differ at node {m}"));
+            }
+            match (ea.child, eb.child) {
+                (Child::Node(x), Child::Node(y)) => {
+                    count += self.embed_rec(dest, src, sp, x as usize, y as usize)?
+                }
+                (_, Child::Value(_)) | (Child::Value(_), _) | (Child::Terminal(_), Child::Terminal(_)) => {}
+                (Child::Frontier(_), Child::Frontier(_)) => {}
+                (x, y) => return Err(format!("children differ below node {m}: {x:?} vs {y:?}")),
+            }
+        }
+        Ok(count)
     }
 }
 
@@ -842,6 +1096,8 @@ struct EvalCtx<'a> {
     prof: &'a [f64],
     i: usize,
     follow: bool,
+    /// Value-leaf values (empty without value leaves).
+    ext: &'a [f64],
     par_min: u32,
 }
 
@@ -880,7 +1136,7 @@ impl EvalCtx<'_> {
                     match edge.child {
                         Child::Node(c) => self.walk(c as usize, ro, cb, cf, rest),
                         leaf => {
-                            w.leaf_cfv(self.i, leaf, ro, cb);
+                            w.leaf_cfv(self.i, leaf, ro, self.ext, cb);
                             cf.copy_from_slice(cb);
                         }
                     }
@@ -943,7 +1199,7 @@ impl EvalCtx<'_> {
                     match edge.child {
                         Child::Node(c) => self.walk(c as usize, cro, cb, cf, rest),
                         leaf => {
-                            w.leaf_cfv(self.i, leaf, cro, cb);
+                            w.leaf_cfv(self.i, leaf, cro, self.ext, cb);
                             cf.copy_from_slice(cb);
                         }
                     }
@@ -982,7 +1238,7 @@ impl EvalCtx<'_> {
                         });
                     }
                     leaf => {
-                        w.leaf_cfv(self.i, leaf, ro, cb);
+                        w.leaf_cfv(self.i, leaf, ro, self.ext, cb);
                         cf.copy_from_slice(cb);
                     }
                 }
@@ -1001,6 +1257,8 @@ struct CfrCtx<'a> {
     wt: f64,
     dpos: f64,
     dneg: f64,
+    /// Value-leaf values (empty without value leaves).
+    ext: &'a [f64],
     par_min: u32,
 }
 
@@ -1062,7 +1320,7 @@ impl CfrCtx<'_> {
                                 child_reach(e, cr);
                                 self.walk(m, c as usize, cr, ro, ccfv, rest);
                             }
-                            leaf => w.leaf_cfv(self.i, leaf, ro, ccfv),
+                            leaf => w.leaf_cfv(self.i, leaf, ro, self.ext, ccfv),
                         }
                         combine(e, ccfv);
                     }
@@ -1120,7 +1378,7 @@ impl CfrCtx<'_> {
                     child_reach(e, cro);
                     match edge.child {
                         Child::Node(c) => self.walk(m, c as usize, ri, cro, ccfv, rest),
-                        leaf => w.leaf_cfv(self.i, leaf, cro, ccfv),
+                        leaf => w.leaf_cfv(self.i, leaf, cro, self.ext, ccfv),
                     }
                     for h in 0..nhi {
                         out[h] += ccfv[h];
@@ -1170,7 +1428,7 @@ impl CfrCtx<'_> {
                             self.walk(&mut mine, c as usize, ri, ro, out, &mut scratch);
                         });
                     }
-                    (leaf, _) => w.leaf_cfv(self.i, leaf, ro, out),
+                    (leaf, _) => w.leaf_cfv(self.i, leaf, ro, self.ext, out),
                 }
             }
         });
@@ -1217,7 +1475,7 @@ impl Gadget {
     /// the current and average gadget strategies to that pure best choice (following on ties).
     fn solve_at_leaf(&mut self, w: &Window, ours: &[f64]) {
         let mut fol = vec![0.0; self.cfvs.len()];
-        w.leaf_cfv(1 - self.player, w.root, ours, &mut fol);
+        w.leaf_cfv(1 - self.player, w.root, ours, &[], &mut fol);
         for (h, (&f, &c)) in fol.iter().zip(&self.cfvs).enumerate() {
             let x = if f >= c { [1.0, 0.0] } else { [0.0, 1.0] };
             self.reg[2 * h..2 * h + 2].copy_from_slice(&x);
@@ -1262,6 +1520,55 @@ pub struct Cfr {
     avg: Vec<f64>,
     pred: Vec<f64>,
     pub gadget: Option<Gadget>,
+    /// Depth-limited solving state (windows with value leaves).
+    pub ext: Option<ExtState>,
+}
+
+/// What the caller of a depth-limited half-iteration evaluates: per value leaf, both players' beliefs (normalised
+/// reaches in the leaf-values layout; uniform over the feasible hands where a player's reach mass is 0) and reach
+/// masses.
+#[derive(Clone, Debug, Default)]
+pub struct LeafQuery {
+    pub beliefs: Vec<f64>,
+    pub mass: Vec<[f64; 2]>,
+}
+
+impl LeafQuery {
+    /// Beliefs and masses from raw reaches (leaf-values layout).
+    pub fn from_reaches(w: &Window, reach: &[f64]) -> LeafQuery {
+        let mut q = LeafQuery { beliefs: reach.to_vec(), mass: Vec::with_capacity(w.value_leaves.len()) };
+        for leaf in &w.value_leaves {
+            let m = [0, 1].map(|p| {
+                let b = &mut q.beliefs[leaf.off[p] as usize..][..leaf.n[p] as usize];
+                let mass: f64 = b.iter().sum();
+                if mass > 0.0 {
+                    b.iter_mut().for_each(|x| *x /= mass);
+                } else {
+                    b.fill(1.0 / b.len() as f64);
+                }
+                mass
+            });
+            q.mass.push(m);
+        }
+        q
+    }
+}
+
+/// Depth-limited solving state: the alternating half-iterations and the averaged leaf values.
+#[derive(Clone, Debug)]
+pub struct ExtState {
+    /// The player whose half-iteration is next (0 starts each iteration).
+    pub phase: usize,
+    /// The query of the half-iteration in progress (`ext_begin` called, `ext_end` not yet).
+    pub query: Option<LeafQuery>,
+    /// The values of the last completed half-iteration (leaf-values layout).
+    pub values: Vec<f64>,
+    /// Per leaf and player `o`: `sum_t w_t m_p^t v_o^t(h)` over `p`'s half-iterations (`p = 1 - o`), at `o`'s slots.
+    acc: Vec<f64>,
+    /// Per leaf: `sum_t w_t m_p^t` over `p`'s half-iterations, indexed by `p`.
+    acc_mass: Vec<[f64; 2]>,
+    /// Half-iterations completed.
+    pub halves: u64,
 }
 
 impl Cfr {
@@ -1278,6 +1585,7 @@ impl Cfr {
             avg: vec![0.0; w.n_entries],
             pred: vec![0.0; w.n_entries],
             gadget: None,
+            ext: None,
         }
     }
 
@@ -1311,9 +1619,33 @@ impl Cfr {
         cfr
     }
 
+    /// Average-strategy weight and DCFR's discounts of positive / negative regrets at iteration `t` (from 1).
+    fn weights(&self) -> (f64, f64, f64) {
+        let t = self.t as f64;
+        match self.algo {
+            Algo::Dcfr => (t * t, t.powf(1.5) / (t.powf(1.5) + 1.0), 0.5),
+            Algo::PcfrPlus => (t * t, 1.0, 1.0),
+            Algo::CfrPlus => (t, 1.0, 1.0),
+        }
+    }
+
+    /// Restarts from the current regrets with new root `ranges` (a warm start for a re-solve whose ranges moved a
+    /// little): the average strategy, the predictions and the iteration count start over, the regrets are kept.
+    pub fn warm_restart(&mut self, w: &Window, ranges: [Vec<f64>; 2]) {
+        for (p, r) in ranges.iter().enumerate() {
+            assert_eq!(r.len(), w.root_hands(p).len(), "range of player {p} has the wrong length");
+        }
+        self.ranges = [normalize(&ranges[0]), normalize(&ranges[1])];
+        self.avg.fill(0.0);
+        self.pred.fill(0.0);
+        self.t = 0;
+    }
+
     /// Runs `iters` iterations. At a leaf root there is nothing to iterate (`t` stays 0); a re-solving gadget is
-    /// then solved exactly instead (the opponent's best terminate/follow choice per hand).
+    /// then solved exactly instead (the opponent's best terminate/follow choice per hand). Windows with value leaves
+    /// iterate through [`Cfr::ext_begin`] / [`Cfr::ext_end`] instead.
     pub fn iterate(&mut self, w: &Window, iters: u32) {
+        assert!(w.value_leaves.is_empty(), "a window with value leaves iterates with ext_begin / ext_end");
         let Child::Node(root) = w.root else {
             if let Some(g) = self.gadget.as_mut() {
                 g.solve_at_leaf(w, &self.ranges[g.player]);
@@ -1323,14 +1655,18 @@ impl Cfr {
         let mut scratch = vec![0.0; w.scratch_len];
         for _ in 0..iters {
             self.t += 1;
-            let t = self.t as f64;
-            let (wt, dpos, dneg) = match self.algo {
-                Algo::Dcfr => (t * t, t.powf(1.5) / (t.powf(1.5) + 1.0), 0.5),
-                Algo::PcfrPlus => (t * t, 1.0, 1.0),
-                Algo::CfrPlus => (t, 1.0, 1.0),
-            };
+            let (wt, dpos, dneg) = self.weights();
             for i in 0..2 {
-                let ctx = CfrCtx { w, algo: self.algo, i, wt, dpos, dneg, par_min: w.par_min(self.threads) };
+                let ctx = CfrCtx {
+                    w,
+                    algo: self.algo,
+                    i,
+                    wt,
+                    dpos,
+                    dneg,
+                    ext: &[],
+                    par_min: w.par_min(self.threads),
+                };
                 let (ri, ro) = match &self.gadget {
                     None => (self.ranges[i].clone(), self.ranges[1 - i].clone()),
                     Some(g) => {
@@ -1369,6 +1705,100 @@ impl Cfr {
                 }
             }
         }
+    }
+
+    /// Starts the next half-iteration of a depth-limited solve (a window with value leaves, or none: then it is an
+    /// ordinary alternating iteration in two calls). Computes the current strategies and returns the leaf query:
+    /// both players' beliefs and masses at every value leaf. Evaluate the value function there and pass both
+    /// players' values to [`Cfr::ext_end`]. The first call starts the external mode.
+    pub fn ext_begin(&mut self, w: &Window) -> &LeafQuery {
+        assert!(self.gadget.is_none(), "depth-limited solving does not take a gadget");
+        let st = self.ext.get_or_insert_with(|| ExtState {
+            phase: 0,
+            query: None,
+            values: vec![0.0; w.n_leaf_values],
+            acc: vec![0.0; w.n_leaf_values],
+            acc_mass: vec![[0.0; 2]; w.value_leaves.len()],
+            halves: 0,
+        });
+        assert!(st.query.is_none(), "ext_begin called twice without ext_end");
+        if st.phase == 0 {
+            self.t += 1;
+        }
+        let prof = self.current(w);
+        let reach = w.leaf_reaches(&prof, &self.ranges);
+        let st = self.ext.as_mut().expect("external state");
+        st.query = Some(LeafQuery::from_reaches(w, &reach));
+        st.query.as_ref().expect("query")
+    }
+
+    /// Ends the half-iteration started by [`Cfr::ext_begin`]: `values` (leaf-values layout, both players, each the
+    /// owner's win probability per hand against the other's belief) become the value-leaf payoffs, and the regrets
+    /// and average strategy of the half-iteration's player are updated.
+    pub fn ext_end(&mut self, w: &Window, values: Vec<f64>) -> Result<(), String> {
+        let st = self.ext.as_mut().filter(|e| e.query.is_some()).ok_or("ext_end without ext_begin")?;
+        if values.len() != w.n_leaf_values {
+            return Err(format!("{} leaf values, the window has {}", values.len(), w.n_leaf_values));
+        }
+        if let Some(x) = values.iter().position(|v| !v.is_finite()) {
+            return Err(format!("leaf value {x} is {}", values[x]));
+        }
+        let query = st.query.take().expect("pending query");
+        let i = st.phase;
+        let o = 1 - i;
+        let (wt, dpos, dneg) = self.weights();
+        if let Child::Node(root) = w.root {
+            let ctx = CfrCtx {
+                w,
+                algo: self.algo,
+                i,
+                wt,
+                dpos,
+                dneg,
+                ext: &values,
+                par_min: w.par_min(self.threads),
+            };
+            let mut scratch = vec![0.0; w.scratch_len];
+            let mut out = vec![0.0; w.root_hands(i).len()];
+            let mut m = Slices { base: 0, reg: &mut self.reg, avg: &mut self.avg, pred: &mut self.pred };
+            ctx.walk(&mut m, root as usize, &self.ranges[i], &self.ranges[o], &mut out, &mut scratch);
+        }
+        let st = self.ext.as_mut().expect("external state");
+        for (j, leaf) in w.value_leaves.iter().enumerate() {
+            let x = wt * query.mass[j][i];
+            st.acc_mass[j][i] += x;
+            if x > 0.0 {
+                let r = leaf.off[o] as usize..leaf.off[o] as usize + leaf.n[o] as usize;
+                for (a, v) in st.acc[r.clone()].iter_mut().zip(&values[r]) {
+                    *a += x * v;
+                }
+            }
+        }
+        st.values = values;
+        st.phase = o;
+        st.halves += 1;
+        Ok(())
+    }
+
+    /// Per value leaf and player `p`: `p`'s values averaged over the other player's half-iterations with the weights
+    /// of the other player's average strategy (`w_t m^t`), i.e. `p`'s values against the other's average strategy
+    /// at the leaf in units where the other's reach there sums to 1 (see the module documentation). The values of
+    /// the last half-iteration where the other player never reached the leaf. Leaf-values layout.
+    pub fn avg_leaf_values(&self, w: &Window) -> Vec<f64> {
+        let Some(st) = &self.ext else { return vec![0.0; w.n_leaf_values] };
+        let mut out = st.values.clone();
+        for (j, leaf) in w.value_leaves.iter().enumerate() {
+            for p in 0..2 {
+                let m = st.acc_mass[j][1 - p];
+                if m > 0.0 {
+                    let r = leaf.off[p] as usize..leaf.off[p] as usize + leaf.n[p] as usize;
+                    for (x, a) in out[r.clone()].iter_mut().zip(&st.acc[r]) {
+                        *x = a / m;
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// The average strategy (normalised profile table).

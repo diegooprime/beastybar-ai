@@ -8,7 +8,9 @@
 //!   (ply 15 of the real game). `game` may be the real position or its public form.
 //! - `hand_rank(animals)`, `hand_unrank(size, rank)`: the fixed hand layout (`C(12, size)` slots).
 //! - `Window`: the exact hidden-information window solver (`window.rs`): build, solve (DCFR / PCFR+ / CFR+),
-//!   exact exploitability of any profile, best responses, counterfactual values, policies and the re-solving gadget.
+//!   exact exploitability of any profile, best responses, counterfactual values, policies and the re-solving gadget;
+//!   depth-limited windows (`leaf_ply`) whose value leaves are valued from Python every half-iteration
+//!   (`solve_external`, `ext_begin` / `ext_end`), and profile assembly (`compose`, `embed`).
 //!
 //! The perfect-information functions share one transposition table (2^18 buckets, 8 MiB); everything releases the
 //! GIL while computing.
@@ -25,7 +27,7 @@ use crate::hands::{num_hands, rank, unplayed, unrank};
 use crate::markov;
 use crate::pisolve::PiSolver;
 use crate::python::Game;
-use crate::window::{Algo, Cfr, Leaves, Window};
+use crate::window::{Algo, Cfr, LeafQuery, Leaves, Window};
 
 static SOLVER: Mutex<Option<PiSolver>> = Mutex::new(None);
 
@@ -147,6 +149,12 @@ fn to_numpy<'py>(py: Python<'py>, data: &[f64], shape: &[usize]) -> PyResult<Bou
 /// Values are win probabilities (win 1, draw .5, loss 0). Hand vectors returned use the same slot layout (0 for
 /// infeasible hands); policies are `(slots, 36)` arrays over the action layout of `bbar/actions.py`.
 ///
+/// `leaf_ply=L` (greater than the root's ply; ply = moves played) makes a *depth-limited* window: every node at
+/// ply `L` that is neither over nor a `leaves` leaf is a value leaf, valued from outside (window.rs, "Depth-limited
+/// solving"). Leaf arrays are `(num_value_leaves, 2, C(12, k))`: `[j, p, slot]` is about player `p` (0/1, not
+/// mover-relative) at value leaf `j` (in `value_leaves()` order); leaf values are the owner's win probability per
+/// hand against the other player's belief. Solve with `solve_external(fn)`; evaluate with `leaf_values=`.
+///
 /// Strategy *profiles* are flat arrays of `num_entries` behaviour probabilities: node `n` (see `nodes()`) owns
 /// entries `offset .. offset + len(hands) * len(actions)`, row-major by hand, for its mover. Wherever a profile is
 /// accepted: `None` (the average strategy of the last `solve`/`resolve`), `"uniform"`, `"average"`, `"current"`, or
@@ -158,9 +166,88 @@ pub struct PyWindow {
     ranges: [Vec<f64>; 2],
     cfr: Option<Cfr>,
     threads: usize,
+    /// Ply of the root and of the value leaves (if any).
+    ply: usize,
+    leaf_ply: Option<usize>,
 }
 
 impl PyWindow {
+    /// Slots of a leaf array's last axis: `C(12, k)`.
+    fn leaf_slots(&self) -> usize {
+        num_hands(self.w.k)
+    }
+
+    /// A `(num_value_leaves, 2, slots)` array -> leaf-values layout (only feasible slots are read; they must be
+    /// finite).
+    fn leaf_local(&self, obj: &Bound<'_, PyAny>, what: &str) -> PyResult<Vec<f64>> {
+        let v = to_f64s(obj)?;
+        let (n, slots) = (self.w.value_leaves.len(), self.leaf_slots());
+        if v.len() != n * 2 * slots {
+            return Err(PyValueError::new_err(format!(
+                "{what}: {} entries, expected {n} x 2 x {slots} (value leaves x players x hand slots)",
+                v.len()
+            )));
+        }
+        let mut out = vec![0.0; self.w.n_leaf_values];
+        for (j, leaf) in self.w.value_leaves.iter().enumerate() {
+            for p in 0..2 {
+                for (h, &mask) in self.w.leaf_hands(j, p).iter().enumerate() {
+                    let x = v[(j * 2 + p) * slots + rank(mask)];
+                    if !x.is_finite() {
+                        return Err(PyValueError::new_err(format!(
+                            "{what}[{j}, {p}, {}] is {x}",
+                            rank(mask)
+                        )));
+                    }
+                    out[leaf.off[p] as usize + h] = x;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Leaf-values layout -> `(num_value_leaves, 2, slots)` array (0 at infeasible slots).
+    fn leaf_global<'py>(&self, py: Python<'py>, local: &[f64]) -> PyResult<Bound<'py, PyAny>> {
+        let (n, slots) = (self.w.value_leaves.len(), self.leaf_slots());
+        let mut out = vec![0.0; n * 2 * slots];
+        for (j, leaf) in self.w.value_leaves.iter().enumerate() {
+            for p in 0..2 {
+                for (h, &mask) in self.w.leaf_hands(j, p).iter().enumerate() {
+                    out[(j * 2 + p) * slots + rank(mask)] = local[leaf.off[p] as usize + h];
+                }
+            }
+        }
+        to_numpy(py, &out, &[n, 2, slots])
+    }
+
+    fn query_numpy<'py>(
+        &self,
+        py: Python<'py>,
+        q: &LeafQuery,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        let mass: Vec<f64> = q.mass.iter().flatten().copied().collect();
+        Ok((self.leaf_global(py, &q.beliefs)?, to_numpy(py, &mass, &[q.mass.len(), 2])?))
+    }
+
+    /// The leaf values to evaluate with: required (and only accepted) for a window with value leaves.
+    fn ext_values(&self, leaf_values: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<f64>> {
+        match (leaf_values, self.w.value_leaves.is_empty()) {
+            (None, true) => Ok(Vec::new()),
+            (None, false) => Err(PyValueError::new_err(
+                "this window has value leaves: pass leaf_values (num_value_leaves, 2, slots)",
+            )),
+            (Some(v), _) => self.leaf_local(v, "leaf_values"),
+        }
+    }
+
+    fn no_value_leaves(&self, what: &str) -> PyResult<()> {
+        if self.w.value_leaves.is_empty() {
+            Ok(())
+        } else {
+            Err(PyValueError::new_err(format!("{what}: this window has value leaves (use solve_external)")))
+        }
+    }
+
     fn slots(&self, n: usize, player: usize) -> (usize, &[u16]) {
         let masks = self.w.node_hands(n, player);
         (num_hands(masks[0].count_ones() as usize), masks)
@@ -245,7 +332,11 @@ impl PyWindow {
     }
 
     /// Player 0's entries from `s0`, player 1's from `s1`.
-    fn compose(&self, s0: Option<&Bound<'_, PyAny>>, s1: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<f64>> {
+    fn compose_profiles(
+        &self,
+        s0: Option<&Bound<'_, PyAny>>,
+        s1: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Vec<f64>> {
         let p = [self.profile(s0)?, self.profile(s1)?];
         let mut out = vec![0.0; self.w.n_entries];
         for (n, node) in self.w.nodes.iter().enumerate() {
@@ -286,7 +377,8 @@ impl PyWindow {
 #[pymethods]
 impl PyWindow {
     #[new]
-    #[pyo3(signature = (game, r0=None, r1=None, k=4, leaves="frontier", threads=1))]
+    #[pyo3(signature = (game, r0=None, r1=None, k=4, leaves="frontier", threads=1, leaf_ply=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         game: PyRef<'_, Game>,
@@ -295,6 +387,7 @@ impl PyWindow {
         k: usize,
         leaves: &str,
         threads: usize,
+        leaf_ply: Option<usize>,
     ) -> PyResult<PyWindow> {
         let leaves = match leaves {
             "frontier" => Leaves::Frontier,
@@ -308,14 +401,78 @@ impl PyWindow {
         };
         let s = game.state;
         let threads = threads.max(1);
-        let w = py.detach(|| Window::build(&s, k, leaves, threads)).map_err(PyValueError::new_err)?;
-        let mut win = PyWindow { w, ranges: [Vec::new(), Vec::new()], cfr: None, threads };
+        let ply = crate::features::ply(&s);
+        let cut = match leaf_ply {
+            None => None,
+            Some(l) if l > ply => Some(l - ply),
+            Some(l) => {
+                return Err(PyValueError::new_err(format!("leaf_ply {l} must exceed the root's ply {ply}")));
+            }
+        };
+        let w =
+            py.detach(|| Window::build_cut(&s, k, leaves, cut, threads)).map_err(PyValueError::new_err)?;
+        if let Some(j) = (0..w.value_leaves.len())
+            .find(|&j| (0..2).any(|p| w.leaf_hands(j, p)[0].count_ones() as usize != k))
+        {
+            return Err(PyValueError::new_err(format!(
+                "value leaf {j} has a public hand (fewer than k unplayed animals): choose another leaf_ply"
+            )));
+        }
+        let mut win = PyWindow { w, ranges: [Vec::new(), Vec::new()], cfr: None, threads, ply, leaf_ply };
         win.ranges = [win.range(0, r0.as_ref())?, win.range(1, r1.as_ref())?];
         Ok(win)
     }
 
-    /// Window size: internal nodes, leaves (terminal and frontier), distinct frontier positions, root hands per
-    /// player, strategy entries, depth, build times.
+    /// Ply of the root (moves played).
+    #[getter]
+    fn ply(&self) -> usize {
+        self.ply
+    }
+
+    /// Ply of the value leaves (None: not a depth-limited window).
+    #[getter]
+    fn leaf_ply(&self) -> Option<usize> {
+        self.leaf_ply
+    }
+
+    #[getter]
+    fn num_value_leaves(&self) -> usize {
+        self.w.value_leaves.len()
+    }
+
+    /// Every value leaf, in the order of leaf arrays: `(history, mover)`, history = public action indices from the
+    /// root.
+    fn value_leaves(&self) -> Vec<(Vec<usize>, u8)> {
+        (0..self.w.value_leaves.len())
+            .map(|j| {
+                (self.w.leaf_history(j).into_iter().map(usize::from).collect(), self.w.value_leaves[j].mover)
+            })
+            .collect()
+    }
+
+    /// The public position (every unplayed animal in hand, decks empty) at value leaf `j`.
+    fn leaf_game(&self, j: usize) -> PyResult<Game> {
+        let leaf = self.w.value_leaves.get(j).ok_or_else(|| {
+            PyValueError::new_err(format!("no value leaf {j} ({} leaves)", self.w.value_leaves.len()))
+        })?;
+        Ok(Game { state: leaf.state })
+    }
+
+    /// float64 `(num_value_leaves, 2, slots)`: 1 at each player's feasible hands at each value leaf.
+    fn leaf_feasible<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.leaf_global(py, &vec![1.0; self.w.n_leaf_values])
+    }
+
+    /// Replaces the root ranges (slot layout; None = uniform over the feasible hands). A solver state is kept: the
+    /// next `solve(warm=True)` restarts from its regrets.
+    #[pyo3(signature = (r0=None, r1=None))]
+    fn set_ranges(&mut self, r0: Option<Bound<'_, PyAny>>, r1: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+        self.ranges = [self.range(0, r0.as_ref())?, self.range(1, r1.as_ref())?];
+        Ok(())
+    }
+
+    /// Window size: internal nodes, leaves (terminal and frontier), distinct frontier positions, value leaves
+    /// (depth-limited windows), root hands per player, strategy entries, depth, build times.
     fn sizes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let st = &self.w.stats;
         let d = PyDict::new(py);
@@ -324,6 +481,7 @@ impl PyWindow {
         d.set_item("terminal_leaves", st.terminal_leaves)?;
         d.set_item("frontier_leaves", st.frontier_leaves)?;
         d.set_item("frontier_positions", st.frontier_positions)?;
+        d.set_item("value_leaves", st.value_leaves)?;
         d.set_item("hands", (self.w.root_hands(0).len(), self.w.root_hands(1).len()))?;
         d.set_item("entries", self.w.n_entries)?;
         d.set_item("max_depth", st.max_depth)?;
@@ -368,7 +526,11 @@ impl PyWindow {
     /// Solves the window from scratch until the exploitability of the average strategy is at most `target`
     /// (checked every `check_every` iterations) or `max_iters`. Returns iterations, exploitability, value (player
     /// 0's expected value), nashconv, br (both best-response values) and seconds.
-    #[pyo3(signature = (target=1e-4, max_iters=100_000, check_every=10, algo="dcfr"))]
+    ///
+    /// `warm=True` restarts from the regrets of the previous `solve` (same algorithm) with the current ranges (see
+    /// `set_ranges`): a re-solve whose ranges moved a little converges in fewer iterations. Its average strategy
+    /// starts over.
+    #[pyo3(signature = (target=1e-4, max_iters=100_000, check_every=10, algo="dcfr", warm=false))]
     fn solve<'py>(
         &mut self,
         py: Python<'py>,
@@ -376,9 +538,17 @@ impl PyWindow {
         max_iters: u32,
         check_every: u32,
         algo: &str,
+        warm: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
+        self.no_value_leaves("solve")?;
         let algo = Self::algo(algo)?;
-        let mut cfr = Cfr::new(&self.w, self.ranges.clone(), algo);
+        let mut cfr = match self.cfr.take() {
+            Some(mut c) if warm && c.algo == algo && c.gadget.is_none() && c.ext.is_none() => {
+                c.warm_restart(&self.w, self.ranges.clone());
+                c
+            }
+            _ => Cfr::new(&self.w, self.ranges.clone(), algo),
+        };
         cfr.threads = self.threads;
         let w = &self.w;
         let r = py.detach(|| cfr.solve(w, target, max_iters, check_every));
@@ -413,6 +583,7 @@ impl PyWindow {
         algo: &str,
         prior: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyDict>> {
+        self.no_value_leaves("resolve")?;
         let p = Self::player(player)?;
         let algo = Self::algo(algo)?;
         let cfvs = self.local(1 - p, &opp_cfvs, "opp_cfvs")?;
@@ -439,16 +610,21 @@ impl PyWindow {
     /// Exact exploitability of a profile on the window with its root ranges: player 0 plays `s0`, player 1 `s1`.
     /// Returns nashconv (BR_0 + BR_1 - 1), exploitability (nashconv / 2), br (both best-response values, each in
     /// that player's win probability) and value (player 0's expected value).
-    #[pyo3(signature = (s0=None, s1=None))]
+    ///
+    /// With value leaves, `leaf_values` (`(num_value_leaves, 2, slots)`) fixes their payoffs: the numbers are those
+    /// of the depth-limited game with these leaf values.
+    #[pyo3(signature = (s0=None, s1=None, leaf_values=None))]
     fn exploitability<'py>(
         &self,
         py: Python<'py>,
         s0: Option<Bound<'py, PyAny>>,
         s1: Option<Bound<'py, PyAny>>,
+        leaf_values: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let prof = self.compose(s0.as_ref(), s1.as_ref())?;
+        let ext = self.ext_values(leaf_values.as_ref())?;
+        let prof = self.compose_profiles(s0.as_ref(), s1.as_ref())?;
         let (w, ranges, threads) = (&self.w, &self.ranges, self.threads);
-        let e = py.detach(|| w.exploitability(&prof, ranges, true, threads));
+        let e = py.detach(|| w.exploitability_ext(&prof, ranges, true, &ext, threads));
         let d = PyDict::new(py);
         d.set_item("nashconv", e.nashconv)?;
         d.set_item("exploitability", e.exploitability)?;
@@ -460,17 +636,19 @@ impl PyWindow {
     /// Best-response counterfactual values of `player` per root hand (slot layout) against the other player's
     /// strategy in profile `s`, the other player's root reach being its window range. `sum(range * values)` is
     /// `player`'s best-response value.
-    #[pyo3(signature = (player, s=None))]
+    #[pyo3(signature = (player, s=None, leaf_values=None))]
     fn br_values<'py>(
         &self,
         py: Python<'py>,
         player: i64,
         s: Option<Bound<'py, PyAny>>,
+        leaf_values: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let p = Self::player(player)?;
+        let ext = self.ext_values(leaf_values.as_ref())?;
         let prof = self.profile(s.as_ref())?;
         let (w, ro, threads) = (&self.w, &self.ranges[1 - p], self.threads);
-        let (best, _) = py.detach(|| w.root_cfvs(p, &prof, ro, false, threads));
+        let (best, _) = py.detach(|| w.root_cfvs_ext(p, &prof, ro, false, &ext, threads));
         let g = self.global(p, &best);
         to_numpy(py, &g, &[g.len()])
     }
@@ -478,34 +656,223 @@ impl PyWindow {
     /// Counterfactual values of `player` per root hand (slot layout) when both follow profile `s`: the opponent's
     /// reach included (its window range), `player`'s excluded. For continual re-solving these are the opponent
     /// cfvs to carry.
-    #[pyo3(signature = (player, s=None))]
+    #[pyo3(signature = (player, s=None, leaf_values=None))]
     fn cfvs<'py>(
         &self,
         py: Python<'py>,
         player: i64,
         s: Option<Bound<'py, PyAny>>,
+        leaf_values: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let p = Self::player(player)?;
+        let ext = self.ext_values(leaf_values.as_ref())?;
         let prof = self.profile(s.as_ref())?;
         let (w, ro, threads) = (&self.w, &self.ranges[1 - p], self.threads);
-        let (_, fol) = py.detach(|| w.root_cfvs(p, &prof, ro, true, threads));
+        let (_, fol) = py.detach(|| w.root_cfvs_ext(p, &prof, ro, true, &ext, threads));
         let g = self.global(p, &fol);
         to_numpy(py, &g, &[g.len()])
     }
 
     /// A pure best response of `player` to profile `s` (a full profile array: `player`'s entries replaced).
-    #[pyo3(signature = (player, s=None))]
+    #[pyo3(signature = (player, s=None, leaf_values=None))]
     fn best_response<'py>(
         &self,
         py: Python<'py>,
         player: i64,
         s: Option<Bound<'py, PyAny>>,
+        leaf_values: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let p = Self::player(player)?;
+        let ext = self.ext_values(leaf_values.as_ref())?;
         let prof = self.profile(s.as_ref())?;
         let (w, ro) = (&self.w, &self.ranges[1 - p]);
-        let br = py.detach(|| w.best_response(p, &prof, ro));
+        let br = py.detach(|| w.best_response_ext(p, &prof, ro, &ext));
         to_numpy(py, &br, &[br.len()])
+    }
+
+    /// Starts a fresh depth-limited solve (`algo`: dcfr, pcfr+, cfr+), replacing any previous solver state. Then
+    /// alternate `ext_begin()` and `ext_end(values)`; `solve_external` does it for you.
+    #[pyo3(signature = (algo="dcfr"))]
+    fn ext_start(&mut self, algo: &str) -> PyResult<()> {
+        let mut cfr = Cfr::new(&self.w, self.ranges.clone(), Self::algo(algo)?);
+        cfr.threads = self.threads;
+        self.cfr = Some(cfr);
+        Ok(())
+    }
+
+    /// Starts the next half-iteration (player 0 then player 1 each iteration): computes the current strategies and
+    /// returns `(player, iteration, beliefs, mass)`, beliefs float64 `(num_value_leaves, 2, slots)` (each player's
+    /// normalised reach at each leaf; uniform over the feasible hands where its reach mass is 0) and mass float64
+    /// `(num_value_leaves, 2)` (reach masses). Answer with `ext_end(values)`.
+    #[allow(clippy::type_complexity)]
+    fn ext_begin<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<(usize, u32, Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        let cfr = self.cfr.as_mut().filter(|c| c.gadget.is_none()).ok_or_else(|| {
+            PyValueError::new_err("no depth-limited solve in progress: call ext_start() first")
+        })?;
+        if cfr.ext.as_ref().is_some_and(|e| e.query.is_some()) {
+            return Err(PyValueError::new_err("ext_begin called twice without ext_end"));
+        }
+        let w = &self.w;
+        let q = py.detach(|| cfr.ext_begin(w).clone());
+        let (player, t) = (cfr.ext.as_ref().map_or(0, |e| e.phase), cfr.t);
+        let (b, m) = self.query_numpy(py, &q)?;
+        Ok((player, t, b, m))
+    }
+
+    /// Ends the half-iteration: `values` float64 `(num_value_leaves, 2, slots)`, `[j, p, slot]` = player `p`'s win
+    /// probability at leaf `j` holding that hand, against the other player's belief of `ext_begin` (only feasible
+    /// slots are read).
+    fn ext_end(&mut self, py: Python<'_>, values: Bound<'_, PyAny>) -> PyResult<()> {
+        let vals = self.leaf_local(&values, "values")?;
+        let cfr = self
+            .cfr
+            .as_mut()
+            .filter(|c| c.ext.as_ref().is_some_and(|e| e.query.is_some()))
+            .ok_or_else(|| PyValueError::new_err("ext_end without ext_begin"))?;
+        let w = &self.w;
+        py.detach(|| cfr.ext_end(w, vals)).map_err(PyValueError::new_err)
+    }
+
+    /// Depth-limited solve: `iters` iterations of alternating CFR (`algo`) whose value leaves are valued by
+    /// `fn(player, iteration, beliefs, mass) -> values` once per half-iteration (see `ext_begin` / `ext_end` for the
+    /// arrays). The leaf beliefs are those of the current iterate (CFR-D; window.rs). Afterwards the average
+    /// strategy is the solution (`profile_array()`), `leaf_query("average")` its leaf beliefs and
+    /// `leaf_values_avg()` the averaged leaf values (the opponent cfvs for re-solving below a leaf). Returns
+    /// iterations, seconds (total) and callback_seconds.
+    #[pyo3(signature = (f, iters=200, algo="dcfr"))]
+    fn solve_external<'py>(
+        &mut self,
+        py: Python<'py>,
+        f: Bound<'py, PyAny>,
+        iters: u32,
+        algo: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let t0 = std::time::Instant::now();
+        self.ext_start(algo)?;
+        let mut cb = 0.0;
+        for _ in 0..2 * iters as usize {
+            let (player, t, b, m) = self.ext_begin(py)?;
+            let t1 = std::time::Instant::now();
+            let values = f.call1((player, t, b, m))?;
+            cb += t1.elapsed().as_secs_f64();
+            self.ext_end(py, values)?;
+        }
+        let d = PyDict::new(py);
+        d.set_item("iterations", self.cfr.as_ref().map_or(0, |c| c.t))?;
+        d.set_item("seconds", t0.elapsed().as_secs_f64())?;
+        d.set_item("callback_seconds", cb)?;
+        d.set_item("algo", Self::algo(algo)?.name())?;
+        Ok(d)
+    }
+
+    /// `(beliefs, mass)` at the value leaves under profile `s` (default: the average strategy), as `ext_begin`
+    /// returns them.
+    #[pyo3(signature = (s=None))]
+    fn leaf_query<'py>(
+        &self,
+        py: Python<'py>,
+        s: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        let prof = self.profile(s.as_ref())?;
+        let (w, ranges) = (&self.w, &self.ranges);
+        let q = py.detach(|| LeafQuery::from_reaches(w, &w.leaf_reaches(&prof, ranges)));
+        self.query_numpy(py, &q)
+    }
+
+    /// float64 `(num_value_leaves, 2, slots)`: each player's leaf values averaged over the other player's
+    /// half-iterations with the weights of the other's average strategy: `[j, p]` = `p`'s values against the other's
+    /// average strategy at leaf `j`, in units where the other's reach there sums to 1. For re-solving player `q`'s
+    /// strategy below leaf `j`, `[j, 1 - q]` are the opponent cfvs (window.rs).
+    fn leaf_values_avg<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let cfr = self
+            .cfr
+            .as_ref()
+            .filter(|c| c.ext.is_some())
+            .ok_or_else(|| PyValueError::new_err("no depth-limited solve yet"))?;
+        let v = cfr.avg_leaf_values(&self.w);
+        self.leaf_global(py, &v)
+    }
+
+    /// One profile array with player 0's entries from `s0` and player 1's from `s1` (profiles as anywhere).
+    #[pyo3(signature = (s0=None, s1=None))]
+    fn compose<'py>(
+        &self,
+        py: Python<'py>,
+        s0: Option<Bound<'py, PyAny>>,
+        s1: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let prof = self.compose_profiles(s0.as_ref(), s1.as_ref())?;
+        to_numpy(py, &prof, &[prof.len()])
+    }
+
+    /// Copies window `src`'s profile `src_profile` (default its average) into `profile` (one of this window's, not
+    /// modified): `src`'s node `src_history` sits at this window's node `history`, and each node below it overwrites
+    /// the node of this window with the same history from there (same public position, hands and actions, else
+    /// ValueError). A value leaf of either window may be an internal node of the other (nothing below it is copied):
+    /// a depth-limited trunk and the re-solved subtrees below its leaves assemble into a full-window profile, and a
+    /// trunk or a leaf subtree can be cut out of a full profile. Returns `(new profile, entries copied)`.
+    #[pyo3(signature = (profile, src, src_profile=None, history=Vec::new(), src_history=Vec::new()))]
+    fn embed<'py>(
+        &self,
+        py: Python<'py>,
+        profile: Bound<'py, PyAny>,
+        src: PyRef<'py, PyWindow>,
+        src_profile: Option<Bound<'py, PyAny>>,
+        history: Vec<u8>,
+        src_history: Vec<u8>,
+    ) -> PyResult<(Bound<'py, PyAny>, usize)> {
+        let mut dest = to_f64s(&profile)?;
+        if dest.len() != self.w.n_entries {
+            return Err(PyValueError::new_err(format!(
+                "profile has {} entries, the window {}",
+                dest.len(),
+                self.w.n_entries
+            )));
+        }
+        let sp = src.profile(src_profile.as_ref())?;
+        let at = self
+            .w
+            .find(&history)
+            .ok_or_else(|| PyValueError::new_err(format!("no internal node at history {history:?}")))?;
+        let src_at = src.w.find(&src_history).ok_or_else(|| {
+            PyValueError::new_err(format!("no internal node of src at history {src_history:?}"))
+        })?;
+        let n = self.w.embed(&mut dest, &src.w, &sp, at, src_at).map_err(PyValueError::new_err)?;
+        Ok((to_numpy(py, &dest, &[dest.len()])?, n))
+    }
+
+    /// `embed` for many sources at once (one copy of the profile): `parts` is a list of `(src, src_profile,
+    /// history)` (src_profile None = src's average), each source's root at this window's node `history`. Returns
+    /// `(new profile, entries copied)`.
+    #[allow(clippy::type_complexity)]
+    fn embed_all<'py>(
+        &self,
+        py: Python<'py>,
+        profile: Bound<'py, PyAny>,
+        parts: Vec<(PyRef<'py, PyWindow>, Option<Bound<'py, PyAny>>, Vec<u8>)>,
+    ) -> PyResult<(Bound<'py, PyAny>, usize)> {
+        let mut dest = to_f64s(&profile)?;
+        if dest.len() != self.w.n_entries {
+            return Err(PyValueError::new_err(format!(
+                "profile has {} entries, the window {}",
+                dest.len(),
+                self.w.n_entries
+            )));
+        }
+        let mut n = 0;
+        for (src, sp, history) in &parts {
+            let sp = src.profile(sp.as_ref())?;
+            let at = self
+                .w
+                .find(history)
+                .ok_or_else(|| PyValueError::new_err(format!("no internal node at history {history:?}")))?;
+            let Some(src_root) = src.w.find(&[]) else { continue };
+            n += self.w.embed(&mut dest, &src.w, &sp, at, src_root).map_err(PyValueError::new_err)?;
+        }
+        Ok((to_numpy(py, &dest, &[dest.len()])?, n))
     }
 
     /// The profile `s` as an array (`"uniform"`, `"average"`, `"current"`, or None for the average).

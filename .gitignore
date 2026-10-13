@@ -11,6 +11,9 @@ build/
 .env
 .env.*
 
+# generated data (value-network labels: data/value/NAME)
+data/
+
 # model weights and checkpoints
 *.pt
 *.pth
@@ -19,7 +22,8 @@ checkpoints/
 # rust
 target/
 
-# experiment outputs; runs/results.jsonl is the evidence trail and is committed
+# experiment outputs; runs/results.jsonl is the evidence trail and is committed (matches, exploiters and E2 append
+# their summary lines there; per-position files such as runs/e2/NAME.jsonl stay local)
 runs/*
 !runs/results.jsonl
 # commit id written on pods by scripts/pod.sh sync

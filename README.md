@@ -42,6 +42,19 @@ This file is the project's state: what exists, how to run it, the current best p
 - **Exploiter** (`bbar/rl/exploit.py`; pods: `scripts/exploit.sh`): PPO best response to a frozen target (built-in spec
   or checkpoint), optionally started from a policy (`--init`). Its final match score - 0.5, logged with its interval,
   is a lower bound on the target's exploitability.
+- **Depth-limited solving** (`core/src/window.rs`, `bbar._core.Window(..., leaf_ply=L)`): windows cut at ply L, value
+  leaves valued from Python every half-iteration with the current iterate's beliefs (CFR-D); composite profile = trunk
+  + safe re-solves below the leaves (`bbar/value/dl.py`), scored by exact exploitability in the full window. With exact
+  leaf values, 200 iterations, 8 ply-11 roots (leaves at 12): mean 2.8e-5 [3.8e-6, 7.2e-5], max 1.8e-4
+  (`runs/results.jsonl`, smoke-S11). Mostly the trunk's slow CFR-D convergence; on slow positions about a third comes
+  from the safe re-solves (the averaged opponent values they respect are only upper bounds), none from leaf-solve or
+  gadget accuracy (`tests/test_value.py`). E2 logs `trunk_eq` (same trunk, exact solution below) to separate them.
+- **PBS value network, experiment E2** (`bbar/value/`; pods: `scripts/value_gen.sh`, `value_train.sh`, `e2.sh`): exact
+  labels (per-hand values of both players from exact window solves, ranges from Dirichlet / sparse / peaked /
+  mixture families, states from random / PIMC / blueprint games), residual-MLP trainer (best.pt picked on a
+  validation split, reported on a separate test split), and the E2 evaluator (network leaves vs exact leaves vs exact
+  solving vs uniform, ply 9 roots; cost = deployable work only; summaries appended to `runs/results.jsonl`). Results
+  pending a pod run.
 
 ## Run
 
@@ -52,6 +65,9 @@ This file is the project's state: what exists, how to run it, the current best p
     .venv/bin/python -m bbar.match A B --deals N [--device D]     # A, B: a spec or nn:PATH[,argmax]
     .venv/bin/python -m bbar.rl.exploit --name NAME --target T [--init PATH]   # exploiter (pods: scripts/exploit.sh)
     .venv/bin/python -m bbar.delta X --T 12,11,10,9 --N 200       # E1: delta_T of X (pods: scripts/e1.sh)
+    .venv/bin/python -m bbar.value.gen --out data/value/NAME      # exact value labels (pods: scripts/value_gen.sh)
+    .venv/bin/python -m bbar.value.train --name NAME --data data/value/NAME   # value network (scripts/value_train.sh)
+    .venv/bin/python -m bbar.value.e2 --net checkpoints/value/NAME/best.pt     # E2 (scripts/e2.sh)
     .venv/bin/python -m bbar.provenance                           # commit and code hash of this tree
     (cd core && cargo run --release --example bench_search)       # search speed
 
