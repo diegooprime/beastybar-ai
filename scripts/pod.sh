@@ -7,6 +7,9 @@
 #                                        write its provenance to REVISION there, rebuild the engine if needed
 #   scripts/pod.sh ssh ID [CMD...]       run a command in the repo dir (interactive shell without CMD)
 #   scripts/pod.sh bg ID NAME CMD...     run CMD detached; log at runs/NAME.log on the pod
+#                                        CMD (ssh, bg): several arguments reach the command as they are, quoted once
+#                                        as for a local command (scripts/value_train.sh v3 "data/value/a data/value/b");
+#                                        a single argument is a shell command line, run as written ('a && b | c')
 #   scripts/pod.sh pull ID PATH          rsync PATH (relative to repo) back from the pod
 #   scripts/pod.sh backup ID             pull data/, checkpoints/ and runs/ into backups/<pod id>/ (no deletes): pods
 #                                        can vanish (e.g. when the account balance runs out), so back up often
@@ -37,6 +40,10 @@ rsh() {
   local id=$1; shift
   read -r host port < <(target "$id")
   ssh "${SSH_OPTS[@]}" -p "$port" "$host" "$@"
+}
+
+cmdline() {  # CMD... as one line for the pod's shell: several arguments each quoted (they arrive unchanged), one as is
+  if [ $# -eq 1 ]; then printf '%s' "$1"; else printf '%q ' "$@"; fi
 }
 
 wait_ssh() {
@@ -93,10 +100,12 @@ except Exception: pass' 2>/dev/null || true)
     if [ $# -eq 0 ]; then
       read -r host port < <(target "$id"); exec ssh "${SSH_OPTS[@]}" -p "$port" -t "$host" "cd $REMOTE; bash -l"
     fi
-    rsh "$id" "cd $REMOTE && source ~/.cargo/env 2>/dev/null; $*" ;;
+    rsh "$id" "cd $REMOTE && source ~/.cargo/env 2>/dev/null; $(cmdline "$@")" ;;
   bg)
     id=$1; name=$2; shift 2
-    rsh "$id" "cd $REMOTE && mkdir -p runs && source ~/.cargo/env 2>/dev/null; nohup bash -c '$*' > runs/$name.log 2>&1 &"
+    line=$(cmdline "$@")
+    rsh "$id" "cd $REMOTE && mkdir -p runs && source ~/.cargo/env 2>/dev/null; nohup bash -c $(printf '%q' "$line") \
+      > runs/$name.log 2>&1 &"
     echo "started $name on $id; log: runs/$name.log" ;;
   pull)
     id=$1; path=$2
@@ -119,5 +128,5 @@ except Exception: pass' 2>/dev/null || true)
   down)
     runpodctl pod delete "$1" ;;
   *)
-    sed -n '2,12p' "$0"; exit 1 ;;
+    awk 'NR > 1 && /^set /{exit} NR > 1' "$0"; exit 1 ;;
 esac

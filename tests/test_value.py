@@ -402,8 +402,10 @@ def test_e2_costs_and_evidence_trail(tmp_path, monkeypatch):
     from bbar.value import e2
     net = tmp_path / "net.pt"
     torch.manual_seed(0)
-    v = ValueNet(width=16, blocks=1)
-    torch.save(dict(model=v.state_dict(), hparams=v.hparams, pbs_version=pbs.PBS_VERSION), net)
+    # A PBS version-1 network (E2 reads both versions; tests/test_options.py): the untrained network whose depth-limited
+    # trunk is less exploitable than uniform play on these positions (a random network need not be).
+    v = ValueNet(width=16, blocks=1, pub_dim=pbs.PUB_DIMS[1])
+    torch.save(dict(model=v.state_dict(), hparams=v.hparams, pbs_version=1), net)
     out, log = tmp_path / "e2.jsonl", tmp_path / "results.jsonl"
     args = ["--net", str(net), "--positions", "2", "--ply", "12", "--leaf-plies", "13", "--iters", "10",
             "--oracle-positions", "1", "--mix", "random:1", "--blueprint", "", "--workers", "1", "--threads", "1",

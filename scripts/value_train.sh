@@ -7,9 +7,11 @@
 #   scripts/pod.sh pull $id runs/value/v1; scripts/pod.sh pull $id checkpoints/value/v1
 #
 # NAME names runs/value/NAME (metrics.jsonl) and checkpoints/value/NAME ({latest,best}.pt); DATA are shard
-# directories (several allowed: quote them, "data/value/a data/value/b"). The labels live on the GPU (~9 KB each:
-# 1M labels = 9 GB). Extra arguments override the flags below (python -m bbar.value.train --help), e.g. a bigger
-# network: --width 1024 --blocks 6.
+# directories, several as one quoted argument (pod.sh bg passes it on unchanged):
+#   scripts/pod.sh bg $id vt-v3 scripts/value_train.sh v3 "data/value/v1 data/value/v2" --arch opt
+# The labels live on the GPU (~9 KB each with PBS v1 features, ~11.5 KB with v2's option features: 1M labels =
+# 11.5 GB). Extra arguments override the flags below (python -m bbar.value.train --help), e.g. a bigger network:
+# --width 1024 --blocks 6, or the option-feature architecture: --arch opt --hand-width 256 --tok-width 128.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=${1:?usage: scripts/value_train.sh NAME DATA [train flags...]}

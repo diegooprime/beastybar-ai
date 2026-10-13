@@ -14,6 +14,7 @@ pub mod eval;
 pub mod features;
 pub mod hands;
 pub mod markov;
+pub mod options;
 pub mod pisolve;
 pub mod policy_obs;
 pub mod rng;
