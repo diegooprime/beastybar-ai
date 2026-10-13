@@ -2,7 +2,9 @@
 
     python -m bbar.delta X [--T 12,11,10,9] [--N 200] [--seed S] [--ranges bayes|uniform] [--device D] [--out PATH]
 
-X: nn:PATH[,argmax] (a policy network), a built-in spec such as pimc:w=8,d=4, or tail:nn:PATH,... (bbar/tail.py).
+X: nn:PATH[,argmax] (a policy network), a built-in spec such as pimc:w=8,d=4, tail:nn:PATH,... (bbar/tail.py) or
+resolve:V=PATH,base=nn:PATH,... (bbar/resolve.py: at T in [P0, F) its table is the root strategy of its depth-limited
+solve at each of its nodes in [T, F) and its exact window from each ply-F node, for every distinct history).
 
 For each T, N positions from self-play games of X against itself (deal i of the arena's deals for --seed, game 0;
 every seat plays X with the arena's seat RNGs; a Python agent gets a fresh instance per seat, bbar.match.PyPlayer),
@@ -10,8 +12,9 @@ stopped after T moves (ply T). Games are self-played --batch at a time, and each
 the next (a tail agent reuses its self-play windows, then releases them). At each position:
   1. ranges: each player's Bayes range over their hands given their own past decisions, assuming they play X
      (bbar/belief.py: exact for networks; for built-in specs sigma is estimated from --samples runs per (decision,
-     hand), smoothed by --alpha; for tail agents from its base network and its solved windows). --ranges uniform skips
-     the inference (uniform over the feasible hands: cheaper, and not X's real beliefs - the output says so).
+     hand), smoothed by --alpha; for tail and resolve agents from their base network and their solves). --ranges
+     uniform skips the inference (uniform over the feasible hands: cheaper, and not X's real beliefs - the output says
+     so).
   2. the window at ply T (bbar._core.Window: every public continuation to the perfect-information frontier, ply 15,
      whose leaves are valued by exact play - so X's own play from ply 15 on is replaced by perfect play);
   3. X's full strategy table on it, for both players (every node, every hand: bbar/policy.py, bbar._core.WindowTree);
@@ -21,7 +24,7 @@ the next (a tail agent reuses its self-play windows, then releases them). At eac
   5. the window's equilibrium value v* (DCFR to --target) and each seat's loss vs equilibrium: player 0 is guaranteed
      1 - BR_1 with X where an equilibrium guarantees v*, so loss_0 = v* - (1 - BR_1) and loss_1 = (1 - v*) - (1 - BR_0)
      (delta_T is their mean; each is known to the equilibrium gap).
-  6. agents that re-solve on top of a base network (tail agents): the per-hand safety margin of each seat p,
+  6. agents that re-solve on top of a base network (tail, resolve agents): the per-hand safety margin of each seat p,
      max over the opponent's feasible hands h of cfv_X(h) - cfv_base(h), where cfv(h) is the opponent's best-response
      value with hand h against seat p's strategy (X's, or the base network's) on X's own solved window for p if X
      already plays from it at ply T (rooted at ply F or F + 1, with its ranges), else on the window at ply T. > 0

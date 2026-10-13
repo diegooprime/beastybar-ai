@@ -12,6 +12,9 @@ Agents:
                    minimax at the end; e.g. tail:nn:PATH,F=10,mode=gadget. It keeps one solved window per game in
                    play (about 12 MB each at F=10), so --batch defaults to 128 when a Python agent plays (at most
                    its cache, default 256, or windows get re-solved: same moves, more compute)
+  resolve:V=PATH,base=nn:PATH,...  the continual re-solving player (bbar/resolve.py): the network early,
+                   depth-limited re-solves with the value network V from ply P0, one exact window from ply F; e.g.
+                   resolve:V=checkpoints/value/v1/best.pt,base=nn:PATH,P0=8,F=10,d=2,iters=200,mode=safe
 
 Protocol, identical to core/src/arena.rs: deal i is the arena's deal (seed, i), started by seat i % 2; game 2i seats
 A at 0 and B at 1, game 2i+1 replays the deal with the seats swapped. Each seat of each game has its own RNG, keyed
@@ -61,7 +64,7 @@ LOG = arena.LOG
 PY_BATCH = 128   # default --batch when a Python agent plays
 # Python agents by spec prefix: module with a class whose factory(body, device) returns a zero-argument callable that
 # makes fresh agents (PyPlayer).
-PY_AGENTS = {"tail:": ("bbar.tail", "TailAgent")}
+PY_AGENTS = {"tail:": ("bbar.tail", "TailAgent"), "resolve:": ("bbar.resolve", "ResolveAgent")}
 
 
 def sha256_short(data):

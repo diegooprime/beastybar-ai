@@ -52,7 +52,13 @@ What we have learned:
 - **Measurement**: `bbar.delta` (exact exploitability from ply T, E1); `bbar.rl.exploit` (PPO best response);
   `bbar.value.e2` (depth-limited solving with a value net vs exact).
 - **Value network pipeline** (`bbar/value/`): exact labels from window solves (`gen.py`, synthetic and Bayes ranges),
-  trainer, E2 evaluator.
+  labels at the beliefs depth-limited solves query (`harvest.py`), trainer (`--arch mlp|hand`), E2 evaluator, and
+  the cascade (`cascade.py`, `scripts/cascade.sh`): labels at earlier plies from depth-limited solves with the current
+  net, retrain, repeat down to ply 0.
+- **Re-solving player** (`bbar/resolve.py`, spec `resolve:V=PATH,base=nn:PATH,P0=8,F=10,d=2,iters=200,mode=safe|plain`):
+  the base network before ply P0, a depth-limited CFR-D solve with value-net leaves at every own decision from P0
+  (safe: carried opponent values in a gadget re-solve; plain: common-knowledge Bayes beliefs), the exact window from
+  ply F, minimax once perfect-information. Not yet measured with a real value net.
 
 ## Run
 
@@ -66,6 +72,7 @@ What we have learned:
     .venv/bin/python -m bbar.value.gen --out data/value/NAME      # exact value labels (scripts/value_gen.sh)
     .venv/bin/python -m bbar.value.train --name NAME --data data/value/NAME   # value net (scripts/value_train.sh)
     .venv/bin/python -m bbar.value.e2 --net checkpoints/value/NAME/best.pt     # E2 (scripts/e2.sh)
+    scripts/cascade.sh NAME DATA --net checkpoints/value/NAME/best.pt          # value labels down to ply 0 (pods)
 
 Pods: `scripts/pod.sh` (up, setup, sync, push, bg, pull, down). Networks and data are not in git: checkpoints/ and
 data/ live on the pods and the laptop.

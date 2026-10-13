@@ -160,19 +160,16 @@ def worker(args):
     return wid, stats
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(prog="python -m bbar.value.gen", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+def add_sampling_args(ap, plies="10,11,12,13", ply_weights="0.4,0.3,0.2,0.1"):
+    """The arguments shared with bbar.value.cascade: output, budget, workers, positions and root ranges."""
     ap.add_argument("--out", required=True, help="output directory (data/value/NAME)")
     ap.add_argument("--labels", type=int, default=100_000, help="labels in all (split over the workers)")
     ap.add_argument("--minutes", type=float, default=0, help="also stop after this many minutes (0 = no limit)")
     ap.add_argument("--workers", type=int, default=os.cpu_count())
-    ap.add_argument("--plies", default="10,11,12,13")
-    ap.add_argument("--ply-weights", default="0.4,0.3,0.2,0.1",
+    ap.add_argument("--plies", default=plies)
+    ap.add_argument("--ply-weights", default=ply_weights,
                     help="relative probability of keeping a game's state at each ply")
     ap.add_argument("--ranges-per-state", type=int, default=4)
-    ap.add_argument("--target", type=float, default=1e-5, help="exploitability of each exact solve")
-    ap.add_argument("--max-iters", type=int, default=20_000)
     ap.add_argument("--algo", default="dcfr")
     ap.add_argument("--mix", default="random:0.2,pimc:0.4,bp:0.4", help="seat policy mix (random, pimc, bp)")
     ap.add_argument("--blueprint", default="checkpoints/bp-v1/step_8000.pt",
@@ -186,7 +183,14 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--force", action="store_true",
                     help="replace the run of the same seed in --out (its shards and summary are deleted first)")
-    a = ap.parse_args(argv)
+
+
+PLIES_ERROR = "--plies must be in 1..14 (ply 15 on is a frontier: exact by the perfect-information solver)"
+
+
+def setup_run(ap, a, kind, prog, argv, min_ply=1, max_ply=14, plies_error=PLIES_ERROR):
+    """Validates the shared arguments, prepares --out (refusing or, with --force, deleting the seed's previous run)
+    and returns (cfg, meta, summary path) for the workers."""
     try:
         provenance.check_build()   # results must come from the engine these sources build
     except provenance.StaleBuild as e:
@@ -195,8 +199,8 @@ def main(argv=None):
     weights = [float(x) for x in a.ply_weights.split(",")]
     if len(weights) != len(plies) or min(weights) <= 0:
         ap.error("--ply-weights: one positive weight per ply")
-    if any(not 1 <= p <= 14 for p in plies):
-        ap.error("--plies must be in 1..14 (ply 15 on is a frontier: exact by the perfect-information solver)")
+    if any(not min_ply <= p <= max_ply for p in plies):
+        ap.error(plies_error)
     blueprint = a.blueprint if a.blueprint and parse_mix(a.mix).get("bp", 0) > 0 else ""
     if blueprint and not Path(blueprint).is_file():
         ap.error(f"no blueprint checkpoint {blueprint} (pass --blueprint '' to drop bp from the mix)")
@@ -216,36 +220,55 @@ def main(argv=None):
         if old:
             print(f"--force: deleted {len(old)} shards of seed {a.seed} in {out}", flush=True)
     workers = max(1, a.workers)
-    cfg = dict(out=str(out), plies=plies, ply_weights=weights, ranges_per_state=a.ranges_per_state, target=a.target,
-               max_iters=a.max_iters, algo=a.algo, mix=a.mix, blueprint=blueprint, explore=a.explore, envs=a.envs,
+    cfg = dict(out=str(out), plies=plies, ply_weights=weights, ranges_per_state=a.ranges_per_state,
+               algo=a.algo, mix=a.mix, blueprint=blueprint, explore=a.explore, envs=a.envs,
                bayes=a.bayes, bayes_model=bayes_model if a.bayes > 0 else "",
-               shard_size=a.shard_size, seed=a.seed, minutes=a.minutes,
+               shard_size=a.shard_size, seed=a.seed, minutes=a.minutes, workers=workers,
                labels_per_worker=-(-a.labels // workers))
-    meta = dict(kind="value-labels", pbs_version=pbs.PBS_VERSION, revision=provenance.revision(), build=build_id(),
+    meta = dict(kind=kind, pbs_version=pbs.PBS_VERSION, revision=provenance.revision(), build=build_id(),
                 host=socket.gethostname(), config=cfg,
                 command=shlex.join(["python", *sys.orig_argv[1:]]) if argv is None else
-                shlex.join(["python", "-m", "bbar.value.gen", *argv]),
+                shlex.join(["python", "-m", prog, *argv]),
                 blueprint_sha256=_sha(blueprint) if blueprint else None,
                 bayes_model_sha256=_sha(bayes_model) if a.bayes > 0 else None,
                 range_kinds=list(pbs.RANGE_KINDS), policies=list(POLICIES),
                 created=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-    print(f"generating {a.labels} labels at plies {plies} with {workers} workers into {out}", flush=True)
+    return cfg, meta, summary_path
+
+
+def run_workers(worker_fn, cfg, meta):
+    """Runs worker_fn((wid, cfg, meta)) on cfg['workers'] processes; (per-ply totals, wall seconds)."""
     t0 = time.time()
-    total = {p: {"labels": 0, "states": 0, "seconds": 0.0, "iterations": 0} for p in plies}
-    jobs = [(i, cfg, meta) for i in range(workers)]
-    if workers == 1:
-        results = map(worker, jobs)
+    total = {p: {} for p in cfg["plies"]}
+    jobs = [(i, cfg, meta) for i in range(cfg["workers"])]
+    if cfg["workers"] == 1:
+        results = map(worker_fn, jobs)
     else:
-        pool = mp.get_context("spawn").Pool(workers)
-        results = pool.imap_unordered(worker, jobs)
+        pool = mp.get_context("spawn").Pool(cfg["workers"])
+        results = pool.imap_unordered(worker_fn, jobs)
     for wid, stats in results:
         for p, st in stats.items():
             for k, v in st.items():
-                total[int(p)][k] += v
-    wall = time.time() - t0
+                total[int(p)][k] = total[int(p)].get(k, 0) + v
+    return total, time.time() - t0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="python -m bbar.value.gen", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_sampling_args(ap)
+    ap.add_argument("--target", type=float, default=1e-5, help="exploitability of each exact solve")
+    ap.add_argument("--max-iters", type=int, default=20_000)
+    a = ap.parse_args(argv)
+    cfg, meta, summary_path = setup_run(ap, a, "value-labels", "bbar.value.gen", argv)
+    cfg.update(target=a.target, max_iters=a.max_iters)
+    meta.update(all_hands_exact=True)      # labels for every feasible hand (bbar.value.train's all-hands term)
+    plies, workers, out = cfg["plies"], cfg["workers"], cfg["out"]
+    print(f"generating {a.labels} labels at plies {plies} with {workers} workers into {out}", flush=True)
+    total, wall = run_workers(worker, cfg, meta)
     rows = []
     for p in plies:
-        st = total[p]
+        st = dict(dict(labels=0, states=0, seconds=0.0, iterations=0), **total[p])
         rate = st["labels"] / st["seconds"] if st["seconds"] else float("nan")
         rows.append(dict(ply=p, labels=st["labels"], states=st["states"], thread_seconds=st["seconds"],
                          labels_per_sec_per_thread=rate,

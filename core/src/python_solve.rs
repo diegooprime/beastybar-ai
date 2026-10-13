@@ -10,7 +10,8 @@
 //! - `Window`: the exact hidden-information window solver (`window.rs`): build, solve (DCFR / PCFR+ / CFR+),
 //!   exact exploitability of any profile, best responses, counterfactual values, policies and the re-solving gadget;
 //!   depth-limited windows (`leaf_ply`) whose value leaves are valued from Python every half-iteration
-//!   (`solve_external`, `ext_begin` / `ext_end`), and profile assembly (`compose`, `embed`).
+//!   (`solve_external`, `resolve_external` with the gadget, `ext_begin` / `ext_end`), counterfactual values at
+//!   internal nodes (`node_values`), and profile assembly (`compose`, `embed`).
 //!
 //! The perfect-information functions share one transposition table (2^18 buckets, 8 MiB); everything releases the
 //! GIL while computing.
@@ -169,6 +170,8 @@ pub struct PyWindow {
     /// Ply of the root and of the value leaves (if any).
     ply: usize,
     leaf_ply: Option<usize>,
+    /// `cfr` was started by `ext_start` (ext_begin / ext_end may drive it).
+    external: bool,
 }
 
 impl PyWindow {
@@ -361,6 +364,31 @@ impl PyWindow {
         to_numpy(py, &out, &[slots, NUM_ACTIONS])
     }
 
+    /// The half-iteration loop of `solve_external` / `resolve_external` (after `ext_start`).
+    fn run_external<'py>(
+        &mut self,
+        py: Python<'py>,
+        f: Bound<'py, PyAny>,
+        iters: u32,
+        algo: &str,
+        t0: std::time::Instant,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let mut cb = 0.0;
+        for _ in 0..2 * iters as usize {
+            let (player, t, b, m) = self.ext_begin(py)?;
+            let t1 = std::time::Instant::now();
+            let values = f.call1((player, t, b, m))?;
+            cb += t1.elapsed().as_secs_f64();
+            self.ext_end(py, values)?;
+        }
+        let d = PyDict::new(py);
+        d.set_item("iterations", self.cfr.as_ref().map_or(0, |c| c.t))?;
+        d.set_item("seconds", t0.elapsed().as_secs_f64())?;
+        d.set_item("callback_seconds", cb)?;
+        d.set_item("algo", Self::algo(algo)?.name())?;
+        Ok(d)
+    }
+
     fn player(player: i64) -> PyResult<usize> {
         match player {
             0 | 1 => Ok(player as usize),
@@ -418,7 +446,8 @@ impl PyWindow {
                 "value leaf {j} has a public hand (fewer than k unplayed animals): choose another leaf_ply"
             )));
         }
-        let mut win = PyWindow { w, ranges: [Vec::new(), Vec::new()], cfr: None, threads, ply, leaf_ply };
+        let mut win =
+            PyWindow { w, ranges: [Vec::new(), Vec::new()], cfr: None, threads, ply, leaf_ply, external: false };
         win.ranges = [win.range(0, r0.as_ref())?, win.range(1, r1.as_ref())?];
         Ok(win)
     }
@@ -553,6 +582,7 @@ impl PyWindow {
         let w = &self.w;
         let r = py.detach(|| cfr.solve(w, target, max_iters, check_every));
         self.cfr = Some(cfr);
+        self.external = false;
         let d = PyDict::new(py);
         d.set_item("iterations", r.iterations)?;
         d.set_item("exploitability", r.exploitability)?;
@@ -596,6 +626,7 @@ impl PyWindow {
         let w = &self.w;
         let r = py.detach(|| cfr.solve(w, target, max_iters, check_every));
         self.cfr = Some(cfr);
+        self.external = false;
         let g = r.gadget.unwrap_or_default();
         let d = PyDict::new(py);
         d.set_item("iterations", r.iterations)?;
@@ -692,11 +723,41 @@ impl PyWindow {
 
     /// Starts a fresh depth-limited solve (`algo`: dcfr, pcfr+, cfr+), replacing any previous solver state. Then
     /// alternate `ext_begin()` and `ext_end(values)`; `solve_external` does it for you.
-    #[pyo3(signature = (algo="dcfr"))]
-    fn ext_start(&mut self, algo: &str) -> PyResult<()> {
-        let mut cfr = Cfr::new(&self.w, self.ranges.clone(), Self::algo(algo)?);
+    ///
+    /// With `player` and `opp_cfvs` it is a re-solve with the gadget (see `resolve`): `player`'s range is the
+    /// window's, the opponent may terminate with each hand at `opp_cfvs` (slot layout, our range normalised) or
+    /// follow into the window, with gadget prior `prior` (uniform over the feasible hands when None); the opponent's
+    /// root reach at the value leaves is its prior times its current follow probability (`resolve_external`).
+    #[pyo3(signature = (algo="dcfr", player=None, opp_cfvs=None, prior=None))]
+    fn ext_start(
+        &mut self,
+        algo: &str,
+        player: Option<i64>,
+        opp_cfvs: Option<Bound<'_, PyAny>>,
+        prior: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let algo = Self::algo(algo)?;
+        let mut cfr = match (player, opp_cfvs) {
+            (None, None) => {
+                if prior.is_some() {
+                    return Err(PyValueError::new_err("prior is the gadget's: pass player and opp_cfvs too"));
+                }
+                Cfr::new(&self.w, self.ranges.clone(), algo)
+            }
+            (Some(p), Some(c)) => {
+                let p = Self::player(p)?;
+                let cfvs = self.local(1 - p, &c, "opp_cfvs")?;
+                let prior = match prior {
+                    None => None,
+                    Some(o) => Some(self.range(1 - p, Some(&o))?),
+                };
+                Cfr::new_gadget(&self.w, p, self.ranges[p].clone(), cfvs, prior, algo)
+            }
+            _ => return Err(PyValueError::new_err("a gadget re-solve needs both player and opp_cfvs")),
+        };
         cfr.threads = self.threads;
         self.cfr = Some(cfr);
+        self.external = true;
         Ok(())
     }
 
@@ -709,7 +770,7 @@ impl PyWindow {
         &mut self,
         py: Python<'py>,
     ) -> PyResult<(usize, u32, Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        let cfr = self.cfr.as_mut().filter(|c| c.gadget.is_none()).ok_or_else(|| {
+        let cfr = self.cfr.as_mut().filter(|_| self.external).ok_or_else(|| {
             PyValueError::new_err("no depth-limited solve in progress: call ext_start() first")
         })?;
         if cfr.ext.as_ref().is_some_and(|e| e.query.is_some()) {
@@ -727,10 +788,11 @@ impl PyWindow {
     /// slots are read).
     fn ext_end(&mut self, py: Python<'_>, values: Bound<'_, PyAny>) -> PyResult<()> {
         let vals = self.leaf_local(&values, "values")?;
+        let external = self.external;
         let cfr = self
             .cfr
             .as_mut()
-            .filter(|c| c.ext.as_ref().is_some_and(|e| e.query.is_some()))
+            .filter(|c| external && c.ext.as_ref().is_some_and(|e| e.query.is_some()))
             .ok_or_else(|| PyValueError::new_err("ext_end without ext_begin"))?;
         let w = &self.w;
         py.detach(|| cfr.ext_end(w, vals)).map_err(PyValueError::new_err)
@@ -751,25 +813,98 @@ impl PyWindow {
         algo: &str,
     ) -> PyResult<Bound<'py, PyDict>> {
         let t0 = std::time::Instant::now();
-        self.ext_start(algo)?;
-        let mut cb = 0.0;
-        for _ in 0..2 * iters as usize {
-            let (player, t, b, m) = self.ext_begin(py)?;
-            let t1 = std::time::Instant::now();
-            let values = f.call1((player, t, b, m))?;
-            cb += t1.elapsed().as_secs_f64();
-            self.ext_end(py, values)?;
-        }
+        self.ext_start(algo, None, None, None)?;
+        self.run_external(py, f, iters, algo, t0)
+    }
+
+    /// Depth-limited re-solve with the gadget (`ext_start` with `player`, `opp_cfvs`, `prior`; continual re-solving):
+    /// `iters` iterations whose value leaves are valued by `fn` as in `solve_external`. Afterwards the average strategy
+    /// is the re-solved one, `gadget_stats(leaf_values)` its evaluation. Returns iterations, seconds and
+    /// callback_seconds.
+    #[pyo3(signature = (player, opp_cfvs, f, iters=200, algo="dcfr", prior=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_external<'py>(
+        &mut self,
+        py: Python<'py>,
+        player: i64,
+        opp_cfvs: Bound<'py, PyAny>,
+        f: Bound<'py, PyAny>,
+        iters: u32,
+        algo: &str,
+        prior: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let t0 = std::time::Instant::now();
+        self.ext_start(algo, Some(player), Some(opp_cfvs), prior)?;
+        self.run_external(py, f, iters, algo, t0)
+    }
+
+    /// The gadget game's evaluation of the last re-solve (`resolve`, `resolve_external`): exploitability, max_violation
+    /// and mean_violation (as `resolve` returns them), with fixed value-leaf values `leaf_values` (required for a
+    /// window with value leaves, e.g. `leaf_values_avg()`: then the numbers are those of the depth-limited gadget game
+    /// with these leaf payoffs).
+    #[pyo3(signature = (leaf_values=None))]
+    fn gadget_stats<'py>(
+        &self,
+        py: Python<'py>,
+        leaf_values: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let ext = self.ext_values(leaf_values.as_ref())?;
+        let cfr = self
+            .cfr
+            .as_ref()
+            .filter(|c| c.gadget.is_some())
+            .ok_or_else(|| PyValueError::new_err("no gadget re-solve yet"))?;
+        let w = &self.w;
+        let g = py.detach(|| cfr.gadget_exploitability_ext(w, &ext));
         let d = PyDict::new(py);
-        d.set_item("iterations", self.cfr.as_ref().map_or(0, |c| c.t))?;
-        d.set_item("seconds", t0.elapsed().as_secs_f64())?;
-        d.set_item("callback_seconds", cb)?;
-        d.set_item("algo", Self::algo(algo)?.name())?;
+        d.set_item("exploitability", g.exploitability)?;
+        d.set_item("max_violation", g.max_violation)?;
+        d.set_item("mean_violation", g.mean_violation)?;
         Ok(d)
     }
 
+    /// Counterfactual values of `player` per hand (slot layout of `player`'s hands there) at the internal node
+    /// reached by `history`, against the other player's strategy in profile `s` (default: the average), the other
+    /// player's root reach being its window range (or, after a gadget re-solve, the opponent's prior times its average
+    /// follow probability), through its own actions on the path. Returns `(best, follow, mass)`: best-response values,
+    /// the values of following `s`, and the other player's reach mass at the node; `best / mass` are in units where
+    /// the other's reach there sums to 1 (the opponent cfvs of a re-solve rooted there). `leaf_values`: as in
+    /// `exploitability` (required with value leaves).
+    #[pyo3(signature = (player, history, s=None, leaf_values=None))]
+    #[allow(clippy::type_complexity)]
+    fn node_values<'py>(
+        &self,
+        py: Python<'py>,
+        player: i64,
+        history: Vec<u8>,
+        s: Option<Bound<'py, PyAny>>,
+        leaf_values: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>, f64)> {
+        let p = Self::player(player)?;
+        let n = self
+            .w
+            .find(&history)
+            .ok_or_else(|| PyValueError::new_err(format!("no internal node at history {history:?}")))?;
+        let ext = self.ext_values(leaf_values.as_ref())?;
+        let prof = self.profile(s.as_ref())?;
+        let ro = match &self.cfr {
+            Some(c) if c.gadget.is_some() => c.root_reaches(true)[1 - p].clone(),
+            _ => self.ranges[1 - p].clone(),
+        };
+        let (w, threads) = (&self.w, self.threads);
+        let (best, fol, mass) = py.detach(|| w.node_cfvs_ext(p, &prof, &ro, n, true, &ext, threads));
+        let (slots, masks) = self.slots(n, p);
+        let (mut gb, mut gf) = (vec![0.0; slots], vec![0.0; slots]);
+        for (h, &mask) in masks.iter().enumerate() {
+            gb[rank(mask)] = best[h];
+            gf[rank(mask)] = fol[h];
+        }
+        Ok((to_numpy(py, &gb, &[slots])?, to_numpy(py, &gf, &[slots])?, mass))
+    }
+
     /// `(beliefs, mass)` at the value leaves under profile `s` (default: the average strategy), as `ext_begin`
-    /// returns them.
+    /// returns them (after a gadget re-solve, the opponent's root reach is its prior times its average follow
+    /// probability).
     #[pyo3(signature = (s=None))]
     fn leaf_query<'py>(
         &self,
@@ -777,8 +912,12 @@ impl PyWindow {
         s: Option<Bound<'py, PyAny>>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
         let prof = self.profile(s.as_ref())?;
-        let (w, ranges) = (&self.w, &self.ranges);
-        let q = py.detach(|| LeafQuery::from_reaches(w, &w.leaf_reaches(&prof, ranges)));
+        let ranges = match &self.cfr {
+            Some(c) if c.gadget.is_some() => c.root_reaches(true),
+            _ => self.ranges.clone(),
+        };
+        let w = &self.w;
+        let q = py.detach(|| LeafQuery::from_reaches(w, &w.leaf_reaches(&prof, &ranges)));
         self.query_numpy(py, &q)
     }
 

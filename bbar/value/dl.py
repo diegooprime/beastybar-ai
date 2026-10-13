@@ -14,12 +14,18 @@ the other player's belief):
     against the other player's solution — exactly how bbar/value/gen.py labels, so a perfect network would return
     these.
 
+Many solves at once (solve_many): DLJob wraps a depth-limited window (and, for a re-solve, the gadget: our range, the
+opponent's carried cfvs and its prior); solve_many runs the jobs' half-iterations in lockstep and values every value
+leaf of every job with ONE call of the value function per half-iteration (GPU batching for bbar/resolve.py and
+bbar/value/cascade.py), the solver work of the jobs on `threads` threads (the solver releases the GIL).
+
 The composite profile in the full window: plies [S, L) from the depth-limited solve's average strategy; below each
 value leaf, for each player p, a safe re-solve of the leaf's subtree (core/src/window.rs gadget): p's range = p's
 belief at the leaf under the average strategy, the opponent's cfvs = `dl.leaf_values_avg()` (the opponent's values
 against p's average strategy there, which the gadget lets the opponent take instead of entering). Each player's
 subtree strategy comes from their own re-solve. Every entry of the full window is covered.
 """
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -69,21 +75,130 @@ class LeafOracle:
         return self.values(beliefs)
 
 
+def leaf_features(dl):
+    """(public features float32 [n, PUB_DIM], movers int64 [n]) of the value leaves of `dl` (what NetValues takes)."""
+    games = [dl.leaf_game(j) for j in range(dl.num_value_leaves)]
+    if not games:
+        return np.zeros((0, pbs.PUB_DIM), dtype=np.float32), np.zeros(0, dtype=np.int64)
+    keys = np.array([public_key(g) for g in games], dtype=np.uint64)
+    return pbs.public_features(keys, [g.start for g in games]), np.array([g.to_move for g in games], dtype=np.int64)
+
+
+class DLJob:
+    """One depth-limited solve for solve_many: the window `w` (built with leaf_ply; its ranges are the solve's) and,
+    for a re-solve, `gadget` = (player, opp_cfvs, prior or None) as Window.ext_start takes them."""
+
+    def __init__(self, w, gadget=None):
+        self.w, self.gadget = w, gadget
+        self.pub, self.movers = leaf_features(w)
+        self._games = None
+
+    @property
+    def leaves(self):
+        return len(self.movers)
+
+    @property
+    def games(self):
+        """The value leaves' public positions (for value functions that need them: ExactValues)."""
+        if self._games is None:
+            self._games = [self.w.leaf_game(j) for j in range(self.w.num_value_leaves)]
+        return self._games
+
+
+class ExactValues:
+    """The exact value function, a drop-in for a value network in solve_many and the agents (for tests and as a
+    reference): each leaf's own window (frontier leaves at ply 15; built once per public position and kept) solved by
+    DCFR to `target` with the query's beliefs as root ranges (warm-started from that window's previous solve), per-hand
+    best-response values against the other player's solution: what bbar/value/gen.py labels, what LeafOracle gives.
+    Only for late leaves (the windows must be small). Takes the leaves' games (needs_games). warm=False solves every
+    query from scratch: the values are then a function of the query alone (an agent using them replays exactly)."""
+    needs_games = True
+
+    def __init__(self, target=1e-6, max_iters=20_000, threads=1, warm=True):
+        self.target, self.max_iters, self.threads, self.warm = target, max_iters, threads, warm
+        self.windows = {}
+        self.stats = {"solves": 0, "iterations": 0, "calls": 0}
+
+    def __call__(self, pub, movers, beliefs, games):
+        self.stats["calls"] += 1
+        keys = [public_key(g) for g in games]
+        for k, g in zip(keys, games):
+            if k not in self.windows:
+                self.windows[k] = [Window(g, threads=1), False]
+
+        def one(j):
+            w, warm = self.windows[keys[j]]
+            w.set_ranges(beliefs[j, 0], beliefs[j, 1])
+            r = w.solve(target=self.target, max_iters=self.max_iters, warm=warm)
+            return np.stack([w.br_values(0), w.br_values(1)]), r["iterations"]
+        out = []
+        for j in range(len(games)):     # sequential per window object: one window may serve several leaves
+            v, it = one(j)
+            self.windows[keys[j]][1] = self.warm
+            out.append(v)
+            self.stats["iterations"] += it
+        self.stats["solves"] += len(out)
+        return np.stack(out) if out else np.zeros((0, 2, pbs.SLOTS))
+
+
+def solve_many(jobs, values, iters, algo="dcfr", threads=1):
+    """Runs `iters` CFR-D iterations of every job (DLJob) in lockstep: each half-iteration, ext_begin on every window,
+    ONE call values(pub, movers, beliefs) over the value leaves of all jobs (NetValues: absolute players in and out),
+    ext_end on every window. Each window's result is what its own solve_external / resolve_external with the same
+    value function would give, up to the value function's float rounding on a different batch. Returns seconds,
+    callback_seconds (value function), leaves (value leaves in all) and calls."""
+    t0 = time.perf_counter()
+    jobs = list(jobs)
+    for j in jobs:
+        if j.gadget is None:
+            j.w.ext_start(algo)
+        else:
+            player, cfvs, prior = j.gadget
+            j.w.ext_start(algo, player, cfvs, prior)
+    sizes = [j.leaves for j in jobs]
+    cuts = np.cumsum(sizes)[:-1]
+    n = int(sum(sizes))
+    pub = np.concatenate([j.pub for j in jobs]) if jobs else np.zeros((0, pbs.PUB_DIM), dtype=np.float32)
+    movers = np.concatenate([j.movers for j in jobs]) if jobs else np.zeros(0, dtype=np.int64)
+    extra = ([g for j in jobs for g in j.games],) if getattr(values, "needs_games", False) else ()
+    pool = ThreadPoolExecutor(threads) if threads > 1 and len(jobs) > 1 else None
+    run = (lambda f, xs: list(pool.map(f, xs))) if pool else (lambda f, xs: [f(x) for x in xs])
+    cb, calls = 0.0, 0
+    try:
+        for _ in range(2 * iters):
+            qs = run(lambda j: j.w.ext_begin(), jobs)
+            if n:
+                beliefs = np.concatenate([q[2] for q in qs])
+                t1 = time.perf_counter()
+                vals = values(pub, movers, beliefs, *extra)
+                cb += time.perf_counter() - t1
+                calls += 1
+                parts = np.split(vals, cuts)
+            else:
+                parts = [np.zeros((0, 2, pbs.SLOTS))] * len(jobs)
+            run(lambda jv: jv[0].w.ext_end(jv[1]), list(zip(jobs, parts)))
+    finally:
+        if pool:
+            pool.shutdown()
+    return dict(seconds=time.perf_counter() - t0, callback_seconds=cb, leaves=n, calls=calls)
+
+
 class NetLeaf:
     """Leaf values from a value network (bbar.value.net.NetValues) at the leaves' PBS."""
 
     def __init__(self, dl, net_values):
-        games = [dl.leaf_game(j) for j in range(dl.num_value_leaves)]
-        keys = np.array([public_key(g) for g in games], dtype=np.uint64)
-        self.pub = pbs.public_features(keys, [g.start for g in games]) if games else np.zeros((0, pbs.PUB_DIM))
-        self.movers = np.array([g.to_move for g in games], dtype=np.int64)
+        self.pub, self.movers = leaf_features(dl)
         self.nv = net_values
+        self.games = [dl.leaf_game(j) for j in range(dl.num_value_leaves)] if getattr(
+            net_values, "needs_games", False) else None
         self.calls = 0
 
     def values(self, beliefs):
         self.calls += 1
         if not len(self.movers):
             return np.zeros((0, 2, pbs.SLOTS))
+        if self.games is not None:
+            return self.nv(self.pub, self.movers, beliefs, self.games)
         return self.nv(self.pub, self.movers, beliefs)
 
     def __call__(self, player, t, beliefs, mass):

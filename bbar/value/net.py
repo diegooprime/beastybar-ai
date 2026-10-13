@@ -80,23 +80,35 @@ def load_value_net(path, device="cpu"):
 
 
 class NetValues:
-    """Leaf values from a value network for a depth-limited window's value leaves (bbar/value/dl.py)."""
+    """Leaf values from a value network for a depth-limited window's value leaves (bbar/value/dl.py).
 
-    def __init__(self, net, device="cpu", batch=4096):
-        self.net, self.device, self.batch = net, torch.device(device), batch
+    `chunk`: evaluate in forward passes of exactly `chunk` rows (the last one padded): every row's values are then the
+    same whatever else is in the call (float matmuls can round differently for different batch shapes: one row alone
+    takes another kernel), so a player batching many solves' leaves plays as it would solving them one at a time."""
+
+    def __init__(self, net, device="cpu", batch=4096, chunk=None):
+        self.net, self.device, self.batch, self.chunk = net, torch.device(device), batch, chunk
 
     @torch.no_grad()
     def __call__(self, pub, movers, beliefs):
         """pub float32 [n, PUB_DIM], movers int [n], beliefs [n, 2, 495] (absolute players) -> values [n, 2, 495]
         (absolute players, clamped to [0, 1])."""
         n = len(movers)
-        movers = np.asarray(movers)
-        flip = movers == 1
-        rel = np.where(flip[:, None, None], beliefs[:, ::-1, :], beliefs)
-        out = np.empty((n, 2, SLOTS))
-        for i in range(0, n, self.batch):
-            p = torch.as_tensor(pub[i:i + self.batch], dtype=torch.float32, device=self.device)
-            r = torch.as_tensor(np.ascontiguousarray(rel[i:i + self.batch]), dtype=torch.float32,
-                                device=self.device)
-            out[i:i + self.batch] = self.net(p, r).clamp(0, 1).double().cpu().numpy()
-        return np.where(flip[:, None, None], out[:, ::-1, :], out)
+        if n == 0:
+            return np.zeros((0, 2, SLOTS))
+        dev = self.device
+        flip = torch.as_tensor(np.asarray(movers) == 1).to(dev)[:, None, None]
+        # float32 on the host (MPS has no float64), then mover-relative on the device.
+        b = torch.as_tensor(np.asarray(beliefs), dtype=torch.float32).to(dev)
+        p = torch.as_tensor(np.asarray(pub), dtype=torch.float32).to(dev)
+        rel = torch.where(flip, b.flip(1), b)
+        out = torch.empty((n, 2, SLOTS), device=dev)
+        step = self.chunk or self.batch
+        for i in range(0, n, step):
+            pc, rc = p[i:i + step], rel[i:i + step]
+            k = len(pc)
+            if self.chunk and k < step:
+                pc = torch.cat([pc, pc.new_zeros((step - k, pc.shape[1]))])
+                rc = torch.cat([rc, rc.new_full((step - k, 2, SLOTS), 1 / SLOTS)])
+            out[i:i + k] = self.net(pc, rc)[:k].clamp(0, 1)
+        return torch.where(flip, out.flip(1), out).cpu().double().numpy()

@@ -46,6 +46,12 @@
 //! (no decisions of ours) the gadget is solved exactly without iterations: each opponent hand takes the better of
 //! its fixed follow value and its terminate value.
 //!
+//! The gadget also runs on a depth-limited window ([`Cfr::ext_begin`] / [`Cfr::ext_end`] after
+//! [`Cfr::new_gadget`]): the opponent's root reach is then its prior times its current follow probability, at the value
+//! leaves as everywhere (continual re-solving, DeepStack: our range exact, the opponent's values carried from the
+//! previous solve). The carried values themselves come from [`Cfr::avg_leaf_values`] (at a value leaf) or
+//! [`Window::node_cfvs_ext`] (at an internal node: the opponent's best-response cfvs there with fixed leaf values).
+//!
 //! # Depth-limited solving (external leaf values)
 //! With value leaves, the window is the trunk of a depth-limited solve (CFR-D, Burch et al. 2014; DeepStack;
 //! ReBeL). A value leaf's payoff is given per hand by a *value function* of the public belief state there: for each
@@ -838,6 +844,50 @@ impl Window {
         out
     }
 
+    /// Counterfactual values of player `i` at internal node `n` (over `i`'s hands there): best-response values
+    /// and, if `follow`, the values of following `profile`, with fixed value-leaf values `ext` (empty without value
+    /// leaves). The other player's reach at `n` is its root reach `ro` (as given, not normalised) times its own action
+    /// probabilities on the path from the root, and draws; its sum is returned too, so `values / mass` are in units
+    /// where the other player's reach at `n` sums to 1 (the opponent cfvs a re-solving gadget rooted at `n` takes).
+    pub fn node_cfvs_ext(
+        &self,
+        i: usize,
+        profile: &[f64],
+        ro: &[f64],
+        n: usize,
+        follow: bool,
+        ext: &[f64],
+        threads: usize,
+    ) -> (Vec<f64>, Vec<f64>, f64) {
+        let mut path = Vec::new();
+        let mut m = n;
+        while self.nodes[m].parent != u32::MAX {
+            let parent = self.nodes[m].parent as usize;
+            path.push((parent, self.nodes[m].action));
+            m = parent;
+        }
+        path.reverse();
+        let mut r = ro.to_vec();
+        for (m, action) in path {
+            let node = &self.nodes[m];
+            if node.mover as usize == i {
+                continue;
+            }
+            let ne = node.n_edges as usize;
+            let e = self.node_edges(m).iter().position(|x| x.action == action).expect("edge on the path");
+            let tr = &self.trans[self.node_edges(m)[e].trans as usize];
+            let mut next = vec![0.0; tr.to_n];
+            tr.push(|h| r[h] * profile[node.entry + h * ne + e], &mut next);
+            r = next;
+        }
+        let nh = self.node_hands(n, i).len();
+        let (mut best, mut fol) = (vec![0.0; nh], vec![0.0; nh]);
+        let ctx = EvalCtx { w: self, prof: profile, i, follow, ext, par_min: self.par_min(threads) };
+        let mut scratch = vec![0.0; self.scratch_len];
+        ctx.walk(n, &r, &mut best, &mut fol, &mut scratch);
+        (best, fol, r.iter().sum())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn br_record(
         &self,
@@ -1470,6 +1520,21 @@ impl Gadget {
             .collect()
     }
 
+    /// The opponent's terminate/follow regret update after its half-iteration: `out` are its follow cfvs per root
+    /// hand (our range normalised).
+    fn update(&mut self, algo: Algo, out: &[f64], wt: f64, dpos: f64, dneg: f64) {
+        let sigma_f = self.follow(algo, false);
+        for h in 0..self.cfvs.len() {
+            let q = [out[h], self.cfvs[h]];
+            let s = [sigma_f[h], 1.0 - sigma_f[h]];
+            let v = s[0] * q[0] + s[1] * q[1];
+            for a in 0..2 {
+                update_regret(algo, &mut self.reg, &mut self.pred, 2 * h + a, q[a] - v, dpos, dneg);
+                self.avg[2 * h + a] += wt * self.prior[h] * s[a];
+            }
+        }
+    }
+
     /// Solves the gadget exactly when the window root is a leaf: we have no decisions there, so each opponent hand
     /// just compares its fixed follow value (the leaf cfv against our range `ours`) with its terminate value. Sets
     /// the current and average gadget strategies to that pure best choice (following on ties).
@@ -1619,6 +1684,17 @@ impl Cfr {
         cfr
     }
 
+    /// Both players' root reaches: the ranges, except that with a re-solving gadget the opponent's is its prior times
+    /// its follow probability (current, or average if `avg`).
+    pub fn root_reaches(&self, avg: bool) -> [Vec<f64>; 2] {
+        let mut r = self.ranges.clone();
+        if let Some(g) = &self.gadget {
+            let follow = g.follow(self.algo, avg);
+            r[1 - g.player] = g.prior.iter().zip(&follow).map(|(p, f)| p * f).collect();
+        }
+        r
+    }
+
     /// Average-strategy weight and DCFR's discounts of positive / negative regrets at iteration `t` (from 1).
     fn weights(&self) -> (f64, f64, f64) {
         let t = self.t as f64;
@@ -1667,41 +1743,13 @@ impl Cfr {
                     ext: &[],
                     par_min: w.par_min(self.threads),
                 };
-                let (ri, ro) = match &self.gadget {
-                    None => (self.ranges[i].clone(), self.ranges[1 - i].clone()),
-                    Some(g) => {
-                        let follow = g.follow(self.algo, false);
-                        let opp: Vec<f64> = g.prior.iter().zip(&follow).map(|(p, f)| p * f).collect();
-                        if i == g.player {
-                            (self.ranges[i].clone(), opp)
-                        } else {
-                            (opp, self.ranges[g.player].clone())
-                        }
-                    }
-                };
+                let r = self.root_reaches(false);
                 let mut out = vec![0.0; w.root_hands(i).len()];
                 let mut m = Slices { base: 0, reg: &mut self.reg, avg: &mut self.avg, pred: &mut self.pred };
-                ctx.walk(&mut m, root as usize, &ri, &ro, &mut out, &mut scratch);
+                ctx.walk(&mut m, root as usize, &r[i], &r[1 - i], &mut out, &mut scratch);
                 // The opponent's gadget decision per hand: follow (value `out`) or terminate (value `cfvs`).
                 if let Some(g) = self.gadget.as_mut().filter(|g| g.player != i) {
-                    let sigma_f = g.follow(self.algo, false);
-                    for h in 0..g.cfvs.len() {
-                        let q = [out[h], g.cfvs[h]];
-                        let s = [sigma_f[h], 1.0 - sigma_f[h]];
-                        let v = s[0] * q[0] + s[1] * q[1];
-                        for a in 0..2 {
-                            update_regret(
-                                self.algo,
-                                &mut g.reg,
-                                &mut g.pred,
-                                2 * h + a,
-                                q[a] - v,
-                                dpos,
-                                dneg,
-                            );
-                            g.avg[2 * h + a] += wt * g.prior[h] * s[a];
-                        }
-                    }
+                    g.update(self.algo, &out, wt, dpos, dneg);
                 }
             }
         }
@@ -1710,9 +1758,9 @@ impl Cfr {
     /// Starts the next half-iteration of a depth-limited solve (a window with value leaves, or none: then it is an
     /// ordinary alternating iteration in two calls). Computes the current strategies and returns the leaf query:
     /// both players' beliefs and masses at every value leaf. Evaluate the value function there and pass both
-    /// players' values to [`Cfr::ext_end`]. The first call starts the external mode.
+    /// players' values to [`Cfr::ext_end`]. The first call starts the external mode. With a re-solving gadget
+    /// ([`Cfr::new_gadget`]) the opponent's root reach is its prior times its current follow probability.
     pub fn ext_begin(&mut self, w: &Window) -> &LeafQuery {
-        assert!(self.gadget.is_none(), "depth-limited solving does not take a gadget");
         let st = self.ext.get_or_insert_with(|| ExtState {
             phase: 0,
             query: None,
@@ -1726,7 +1774,7 @@ impl Cfr {
             self.t += 1;
         }
         let prof = self.current(w);
-        let reach = w.leaf_reaches(&prof, &self.ranges);
+        let reach = w.leaf_reaches(&prof, &self.root_reaches(false));
         let st = self.ext.as_mut().expect("external state");
         st.query = Some(LeafQuery::from_reaches(w, &reach));
         st.query.as_ref().expect("query")
@@ -1758,10 +1806,16 @@ impl Cfr {
                 ext: &values,
                 par_min: w.par_min(self.threads),
             };
+            let r = self.root_reaches(false);
             let mut scratch = vec![0.0; w.scratch_len];
             let mut out = vec![0.0; w.root_hands(i).len()];
             let mut m = Slices { base: 0, reg: &mut self.reg, avg: &mut self.avg, pred: &mut self.pred };
-            ctx.walk(&mut m, root as usize, &self.ranges[i], &self.ranges[o], &mut out, &mut scratch);
+            ctx.walk(&mut m, root as usize, &r[i], &r[o], &mut out, &mut scratch);
+            if let Some(g) = self.gadget.as_mut().filter(|g| g.player != i) {
+                g.update(self.algo, &out, wt, dpos, dneg);
+            }
+        } else if let Some(g) = self.gadget.as_mut() {
+            g.solve_at_leaf(w, &self.ranges[g.player]);
         }
         let st = self.ext.as_mut().expect("external state");
         for (j, leaf) in w.value_leaves.iter().enumerate() {
@@ -1823,11 +1877,16 @@ impl Cfr {
 
     /// Exact evaluation of the gadget game for the average strategies.
     pub fn gadget_exploitability(&self, w: &Window) -> GadgetExpl {
+        self.gadget_exploitability_ext(w, &[])
+    }
+
+    /// [`Cfr::gadget_exploitability`] in the depth-limited game whose value leaves pay the fixed values `ext`.
+    pub fn gadget_exploitability_ext(&self, w: &Window, ext: &[f64]) -> GadgetExpl {
         let g = self.gadget.as_ref().expect("not a gadget solve");
         let (pl, o) = (g.player, 1 - g.player);
         let prof = self.average(w);
         let ours = &self.ranges[pl];
-        let (br_o, _) = w.root_cfvs(o, &prof, ours, false, self.threads);
+        let (br_o, _) = w.root_cfvs_ext(o, &prof, ours, false, ext, self.threads);
         let mut br_opp = 0.0;
         let (mut max_v, mut mean_v) = (f64::NEG_INFINITY, 0.0);
         for ((&prior, &br), &cfv) in g.prior.iter().zip(&br_o).zip(&g.cfvs) {
@@ -1837,7 +1896,7 @@ impl Cfr {
         }
         let follow = g.follow(self.algo, true);
         let opp: Vec<f64> = g.prior.iter().zip(&follow).map(|(p, f)| p * f).collect();
-        let (br_p, _) = w.root_cfvs(pl, &prof, &opp, false, self.threads);
+        let (br_p, _) = w.root_cfvs_ext(pl, &prof, &opp, false, ext, self.threads);
         let mut br_ours: f64 = ours.iter().zip(&br_p).map(|(r, v)| r * v).sum();
         for ((&prior, &f), &cfv) in g.prior.iter().zip(&follow).zip(&g.cfvs) {
             br_ours += prior * (1.0 - f) * (1.0 - cfv);
