@@ -460,3 +460,22 @@ def test_hand_net_is_zero_sum_and_round_trips(tmp_path):
     torch.save(dict(model=net.state_dict(), hparams=net.hparams, pbs_version=pbs.PBS_VERSION), path)
     back, _ = load_value_net(path)
     assert torch.allclose(back(pub, r), v.detach())
+
+
+def test_harvest_labels_the_queried_beliefs(tmp_path):
+    """bbar.value.harvest: labels at the leaf ply, kind dl-query, beliefs normalised, solved to the target."""
+    import torch
+    from bbar.value import harvest
+    from bbar.value.net import make_value_net
+    torch.manual_seed(0)
+    net = make_value_net("hand", width=16, blocks=1, hand_width=8)
+    path = tmp_path / "v.pt"
+    torch.save(dict(model=net.state_dict(), hparams=net.hparams, pbs_version=pbs.PBS_VERSION), path)
+    summary = harvest.main(["--net", str(path), "--out", str(tmp_path / "q"), "--labels", "4", "--workers", "1",
+                            "--root-plies", "12", "--iters", "20", "--leaves-per-state", "4", "--bayes", "0",
+                            "--mix", "random:1", "--blueprint", ""])
+    from bbar.value.train import load_labels
+    d, _ = load_labels([str(tmp_path / "q")])
+    assert summary["labels"] >= 4 and np.all(d["ply"] == 13)
+    assert np.all(d["kinds"] == pbs.RANGE_KINDS.index("dl-query")) and np.all(d["exploitability"] <= 1e-5)
+    assert np.allclose(d["ranges"].sum(-1), 1, atol=1e-4) and np.all(d["values"][~d["mask"]] == 0)

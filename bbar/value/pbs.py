@@ -139,7 +139,8 @@ def masks_of_keys(keys):
 # ---- root ranges ---------------------------------------------------------------------------------------------------
 
 RANGE_KINDS = ("uniform", "dirichlet0.1", "dirichlet0.3", "dirichlet1", "sparse", "peaked", "mixture",
-               "bayes", "bayes-mix")   # the last two: Bayes ranges under a policy model (bbar/value/gen.py --bayes)
+               "bayes", "bayes-mix",   # Bayes ranges under a policy model (bbar/value/gen.py --bayes)
+               "dl-query")             # beliefs a depth-limited solve queried at a leaf (bbar/value/harvest.py)
 RANGE_WEIGHTS = (0.10, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15)
 SYNTHETIC_KINDS = RANGE_KINDS[:len(RANGE_WEIGHTS)]   # what sample_range draws
 
