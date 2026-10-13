@@ -32,13 +32,16 @@ This file is the project's state: what exists, how to run it, the current best p
 
 ## Current best player
 
-`pimc:w=16,d=4`: 88.2% [85.1, 90.8] against `greedy`, 99.2% [98.2, 99.7] against `random` (200 deal pairs, seed 1;
-95% intervals). Fixed opponents only; exploitability not measured yet.
+`pimc:w=128,d=8` (search only, no learning). Round robin, 1000 deal pairs each, seed 11, 95% intervals
+(`--ladder greedy pimc:w=8,d=4 pimc:w=32,d=4 pimc:w=32,d=6 pimc:w=128,d=6 pimc:w=32,d=8 pimc:w=128,d=8`, commit 598db4f):
 
-Value of information (500 deal pairs, seed 2): knowing the opponent's hand scores 65.5% [63.0, 68.0] against the same
-PIMC without it; also knowing the deck orders adds nothing measurable (`pimc-hand` vs `cheat`: 49.9% [47.4, 52.4]).
+| vs | greedy | pimc w=8,d=4 | w=32,d=4 | w=32,d=6 | w=128,d=6 | w=32,d=8 |
+|---|---|---|---|---|---|---|
+| pimc:w=128,d=8 | 96.7 [96.0, 97.3] | 70.7 [69.1, 72.3] | 67.5 [65.8, 69.1] | 57.4 [55.8, 59.0] | 57.0 [55.5, 58.6] | 51.7 [50.2, 53.2] |
 
-These come from uncommitted code (log lines with commit `7c1c91c-dirty`, code `08cad7cf04c9e56b`); re-run both
-ladders (`--ladder random greedy pimc:w=16,d=4 --deals 200 --seed 1`, `--ladder pimc:w=16,d=4 pimc-hand:w=16,d=4
-cheat:d=4 --deals 500 --seed 2`) once it is committed. Earlier log lines predate the current seed derivation and
-interval.
+Search depth buys most of the strength (d=4 -> 6 -> 8); more sampled worlds buy little. Exploitability not measured
+yet: fixed opponents only.
+
+Value of information (2000 deal pairs, seed 12, depth 6): knowing the opponent's hand scores 66.8% [65.6, 67.9]
+against the same PIMC without it; also knowing deck orders adds nothing (50.8% [49.6, 51.9]). Hidden-hand play is
+where the strength is.
