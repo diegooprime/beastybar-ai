@@ -46,6 +46,21 @@ What we have learned:
   0.111 (blueprint) to 0.015 and beats every earlier player. Next: the cascade (value labels for plies 8 down to 0) so
   the search starts at ply 0 instead of 8.
 
+## Play
+
+    .venv/bin/python -m bbar.play --open        # http://127.0.0.1:8765, local only
+
+A page in your browser against the strongest player available on this machine (default: the re-solving player with
+`checkpoints/value/v3h/best.pt` on the CPU; without checkpoints it falls back to the blueprint network or PIMC and
+says so). You see the queue from Heaven's Gate (front) to THAT'S IT (back), the bar and bounced piles, both scores
+and deck sizes, your hand, your deck as a set and the AI's unplayed animals as a set. Click a card (then its target,
+hop or animal to copy), check the preview, confirm. The move log tells what every move did; the AI thinks in the
+background with its time shown (on the M4: 5-12 s at its first re-solved move, ply 8 or 9; at most ~0.3 s otherwise;
+it precomputes what it can while you think). Rules cheat sheet, end screen, opponent picker (re-solver, blueprint,
+PIMC d=8 / d=4, greedy, random). Options: `--opponent SPEC|KEY --seat 0|1|random --seed S --port P --device cpu|mps`.
+The AI plays through bbar.match's code path (a one-game VecEnv: its own view and the public history only). Finished
+games go to `runs/play/games.jsonl`.
+
 ## What exists
 
 - **Engine** `bbar._core` (Rust, `core/`): exact on all 2000 [golden](golden/) games, ~700k random games/s per thread;
