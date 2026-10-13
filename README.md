@@ -25,6 +25,10 @@ mission's sense: plies 0-7 are still the blueprint's, and exploitability is meas
 | `pimc:w=8,d=4` | - | 29.3 [27.7, 30.9] | >= 0.161 [0.157, 0.165] (PPO exploiter) |
 | iter949 (previous attempt's best network) | 14.8 [13.5, 16.1] | - | not measured |
 
+Against iter949 (the previous attempt's best network, `iter949:DIR`), the best player scores 83.5% [80.2, 86.3]
+(200 pairs) and the blueprint alone 85.2% [83.9, 86.5]: both far ahead, and the re-solver, which plays toward an
+unexploitable strategy rather than at this opponent's mistakes, gains nothing over the blueprint here.
+
 "From ply T": an exact best response that copies the player until ply T and then plays perfectly gains this much over
 0.5 (`bbar.delta`, self-play positions with Bayes ranges). Every player that plays the blueprint before ply 8 reaches
 the same positions for the same seed, so the ply-8 numbers compare players position by position
@@ -39,7 +43,7 @@ the discriminating measure.
 
 Scores: win 1, draw 0.5, loss 0, duplicate deal pairs: resolve rows 300-500 (c5-2 vs the blueprint 192, c5-2 vs c5m
 48 and c5m vs v3h 320: stopped at the compute deadline), 2000 for blueprint rows and PIMC d=8 vs the blueprint, 1000
-for `pimc:w=8,d=4` and iter949, 20,000 for exploiters. Exploitability = best responder's score - 0.5.
+for `pimc:w=8,d=4` and the blueprint vs iter949, 20,000 for exploiters. Exploitability = best responder's score - 0.5.
 
 What we have learned:
 - **Hidden-hand play is where the strength is.** Knowing the opponent's hand scores 66.8% [65.6, 67.9] against the same

@@ -4,7 +4,7 @@
     {
       "name": "play",
       "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "bbar.play", "--no-record", "--seat", "0"],
+      "runtimeArgs": ["-m", "bbar.play"],
       "port": 8765
     }
   ]
