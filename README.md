@@ -52,9 +52,11 @@ What we have learned:
 - **Measurement**: `bbar.delta` (exact exploitability from ply T, E1); `bbar.rl.exploit` (PPO best response);
   `bbar.value.e2` (depth-limited solving with a value net vs exact).
 - **Value network pipeline** (`bbar/value/`): exact labels from window solves (`gen.py`, synthetic and Bayes ranges),
-  labels at the beliefs depth-limited solves query (`harvest.py`), trainer (`--arch mlp|hand`), E2 evaluator, and
+  labels at the beliefs depth-limited solves query (`harvest.py`), trainer (`--arch mlp|hand|opt`), E2 evaluator, and
   the cascade (`cascade.py`, `scripts/cascade.sh`): labels at earlier plies from depth-limited solves with the current
-  net, retrain, repeat down to ply 0.
+  net, retrain, repeat down to ply 0. PBS v2 inputs add option features (`core/src/options.rs`: for every unplayed
+  animal of either player, what playing it now would do, best and worst parameter); `--arch opt` builds each hand's
+  value from its animals' features. Version-1 networks still load and run everywhere.
 - **Re-solving player** (`bbar/resolve.py`, spec `resolve:V=PATH,base=nn:PATH,P0=8,F=10,d=2,iters=200,mode=safe|plain`):
   the base network before ply P0, a depth-limited CFR-D solve with value-net leaves at every own decision from P0
   (safe: carried opponent values in a gadget re-solve; plain: common-knowledge Bayes beliefs), the exact window from

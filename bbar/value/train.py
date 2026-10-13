@@ -1,9 +1,11 @@
 """Train the PBS value network on exact labels (bbar/value/gen.py shards) and cascade labels (bbar/value/cascade.py).
 
     python -m bbar.value.train --name NAME --data data/value/A [data/value/B ...] [--steps 20000] [--batch 1024]
-        [--width 512 --blocks 3 --expansion 1] [--lr 1e-3] [--device auto] [--val-permille 50] [--test-permille 50]
+        [--arch mlp|hand|opt] [--pbs 2] [--width 512 --blocks 3 --expansion 1] [--lr 1e-3] [--device auto]
+        [--val-permille 50] [--test-permille 50] [--minutes M] [--train-permille 1000]
 
-Model: bbar/value/net.py (residual MLP, sigmoid outputs, zero-sum shift unless --no-zero-sum). Loss per label:
+Model: bbar/value/net.py (--arch; sigmoid outputs, zero-sum shift unless --no-zero-sum), reading the public features
+of PBS version --pbs (1: 134 features, 2: with the option features; opt needs 2). Loss per label:
 range-weighted Huber over both players' hands, sum_p sum_h b_p(h) huber(v_p(h) - y_p(h)) / 2, plus --all-weight times
 the mean Huber over all feasible hands (hands outside the ranges still matter: they are the values of deviations).
 That second term needs labels that are right for every hand: a shard whose meta says all_hands_exact = false
@@ -15,6 +17,12 @@ buckets) is used once, to report best.pt's error, which the selection does not b
 range-weighted MAE and RMSE of the per-hand values (rw_mae, rw_rmse), MAE over all feasible hands (all_mae, None
 where no label of the selection has all-hands values), and the error of the game value b_m . v_m against the label
 (gv_mae, gv_rmse); the constant-0.5 predictor's rw_mae is logged once for scale.
+
+Budget: --steps, and with --minutes also a wall-clock limit on the training steps (evaluations not counted): the
+learning-rate schedule (warmup, then cosine to --min-lr) follows whichever is further along, and training stops when
+either runs out (equal-time comparisons of architectures). --train-permille keeps that share of the training public
+states (another hash of the key: the same states for every run, nested as it grows; validation and test unchanged):
+data-scaling slices.
 
 Outputs: runs/value/NAME/metrics.jsonl (config line, then train and val lines, a test line: best.pt's metrics on the
 test split, and a final done line), checkpoints/value/NAME/{latest.pt, best.pt} (best by overall val rw_mae) with the
@@ -57,9 +65,9 @@ def all_hands_exact(meta):
     return bool(meta.get("all_hands_exact", meta.get("kind") != "cascade-labels"))
 
 
-def load_labels(sources):
-    """Concatenated label arrays of every shard, with the PBS public features, feasibility masks and all_exact (bool
-    per label: its shard's all_hands_exact)."""
+def load_labels(sources, pbs_version=pbs.PBS_VERSION):
+    """Concatenated label arrays of every shard, with the public features of PBS version `pbs_version`, feasibility
+    masks and all_exact (bool per label: its shard's all_hands_exact)."""
     paths = shard_paths(sources)
     if not paths:
         raise SystemExit(f"no shards in {sources}")
@@ -73,7 +81,7 @@ def load_labels(sources):
             meta = json.loads(z["meta"].item()) if "meta" in z.files else {}
             cols["all_exact"].append(np.full(len(z["key"]), all_hands_exact(meta)))
     d = {k: np.concatenate(v) for k, v in cols.items()}
-    d["pub"] = pbs.public_features(d["key"], d["start"])
+    d["pub"] = pbs.public_features(d["key"], d["start"], pbs_version)
     d["mask"] = pbs.masks_of_keys(d["key"])
     return d, paths
 
@@ -83,6 +91,13 @@ def split(keys, val_permille, test_permille=0, salt=0x9E3779B97F4A7C15):
     side): validation below val_permille, test in [val_permille, val_permille + test_permille), training above."""
     h = ((keys.astype(np.uint64) * np.uint64(salt)) >> np.uint64(40)) % np.uint64(1000)
     return h < np.uint64(val_permille), (h >= np.uint64(val_permille)) & (h < np.uint64(val_permille + test_permille))
+
+
+def train_subset(keys, permille, salt=0xD1B54A32D192ED03):
+    """bool [n]: the public states kept for training at `permille` (a hash of the key independent of split's; all
+    range draws of a state together; the kept sets are nested as permille grows)."""
+    h = ((keys.astype(np.uint64) * np.uint64(salt)) >> np.uint64(40)) % np.uint64(1000)
+    return h < np.uint64(permille)
 
 
 def huber(x, delta):
@@ -174,8 +189,11 @@ def main(argv=None):
     ap.add_argument("--warmup", type=int, default=500)
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--arch", default="mlp", choices=sorted(ARCHS), help="mlp: 990-way linear head; hand: shared "
-                    "per-hand head (bbar/value/net.py)")
-    ap.add_argument("--hand-width", type=int, default=256, help="--arch hand: width of the per-hand head")
+                    "per-hand head; opt: per-hand head built from the animals' option features (bbar/value/net.py)")
+    ap.add_argument("--pbs", type=int, default=pbs.PBS_VERSION, choices=sorted(pbs.PUB_DIMS),
+                    help="PBS version of the public features the network reads (2: with option features)")
+    ap.add_argument("--hand-width", type=int, default=256, help="--arch hand, opt: width of the per-hand head")
+    ap.add_argument("--tok-width", type=int, default=128, help="--arch opt: width of the per-animal tokens")
     ap.add_argument("--width", type=int, default=512)
     ap.add_argument("--blocks", type=int, default=3)
     ap.add_argument("--expansion", type=int, default=1)
@@ -189,6 +207,10 @@ def main(argv=None):
                     help="validation share of public states (checkpoint selection), per mille")
     ap.add_argument("--test-permille", type=int, default=50,
                     help="test share of public states (reporting best.pt only; 0 = none), per mille")
+    ap.add_argument("--minutes", type=float, default=0,
+                    help="also stop after this many minutes of training steps (0 = --steps only)")
+    ap.add_argument("--train-permille", type=int, default=1000,
+                    help="share of the training public states used, per mille (data-scaling slices)")
     ap.add_argument("--eval-every", type=int, default=1000)
     ap.add_argument("--log-every", type=int, default=100)
     ap.add_argument("--device", default="auto")
@@ -197,6 +219,10 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.val_permille <= 0 or a.test_permille < 0 or a.val_permille + a.test_permille >= 1000:
         ap.error("need 0 < --val-permille, 0 <= --test-permille and their sum < 1000")
+    if not 0 < a.train_permille <= 1000:
+        ap.error("--train-permille must be in 1..1000")
+    if a.arch == "opt" and a.pbs < 2:
+        ap.error("--arch opt reads the option features: needs --pbs 2")
 
     from bbar.match import resolve_device
     device = resolve_device(a.device)
@@ -209,15 +235,18 @@ def main(argv=None):
     ck_dir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
-    data, paths = load_labels(a.data)
+    data, paths = load_labels(a.data, a.pbs)
     held, test = split(data["key"], a.val_permille, a.test_permille)
-    tr_idx, va_idx, te_idx = np.flatnonzero(~held & ~test), np.flatnonzero(held), np.flatnonzero(test)
+    keep = train_subset(data["key"], a.train_permille)
+    tr_idx, va_idx, te_idx = np.flatnonzero(~held & ~test & keep), np.flatnonzero(held), np.flatnonzero(test)
     if not len(tr_idx) or not len(va_idx) or (a.test_permille and not len(te_idx)):
         ap.error(f"{len(tr_idx)} training, {len(va_idx)} validation and {len(te_idx)} test labels: need each "
                  "(--test-permille 0 drops the test split)")
     n_states = len(np.unique(data["key"]))
+    n_tr_states = len(np.unique(data["key"][tr_idx]))
     print(f"{len(data['key'])} labels ({n_states} public states) from {len(paths)} shards in {time.time() - t0:.1f}s: "
-          f"{len(tr_idx)} train, {len(va_idx)} validation, {len(te_idx)} test; "
+          f"{len(tr_idx)} train ({n_tr_states} states, {a.train_permille} permille kept), {len(va_idx)} validation, "
+          f"{len(te_idx)} test; PBS v{a.pbs} ({pbs.PUB_DIMS[a.pbs]} public features); "
           f"plies {np.bincount(data['ply']).nonzero()[0].tolist()}; device {device}", flush=True)
     # Training tensors on the device (a few KB per label).
     dev = {k: torch.as_tensor(data[k][tr_idx]).to(device) for k in ("pub", "ranges", "values", "mask")}
@@ -230,17 +259,18 @@ def main(argv=None):
         print(f"{n_partial} labels with values right on the ranges only (cascade): all-hands weight "
               f"{a.cascade_all_weight}", flush=True)
 
-    extra = {"hand_width": a.hand_width} if a.arch == "hand" else {}
+    extra = {"hand": {"hand_width": a.hand_width}, "opt": {"hand_width": a.hand_width, "tok_width": a.tok_width}}
     net = make_value_net(a.arch, width=a.width, blocks=a.blocks, expansion=a.expansion, zero_sum=not a.no_zero_sum,
-                         **extra).to(device)
+                         pub_dim=pbs.PUB_DIMS[a.pbs], **extra.get(a.arch, {})).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=a.weight_decay)
     nparams = sum(p.numel() for p in net.parameters())
     revision = provenance.revision()
     config = dict(vars(a), device=str(device), params=nparams, data_files=[str(p) for p in paths],
-                  n_train=len(tr_idx), n_val=len(va_idx), n_test=len(te_idx), n_partial=n_partial, revision=revision,
+                  n_train=len(tr_idx), n_train_states=n_tr_states, n_val=len(va_idx), n_test=len(te_idx),
+                  n_partial=n_partial, revision=revision,
                   host=socket.gethostname(),
                   command=shlex.join(["python", *sys.orig_argv[1:]]) if argv is None else
-                  shlex.join(["python", "-m", "bbar.value.train", *argv]), pbs_version=pbs.PBS_VERSION)
+                  shlex.join(["python", "-m", "bbar.value.train", *argv]), pbs_version=a.pbs)
     log = open(run_dir / "metrics.jsonl", "w")
     for old in ("best.pt", "latest.pt"):     # a previous run's checkpoints must not pass for this run's
         (ck_dir / old).unlink(missing_ok=True)
@@ -250,14 +280,21 @@ def main(argv=None):
         log.flush()
     write(dict(kind="config", **config))
 
-    def lr_at(step):
+    budget = 60 * a.minutes
+
+    def progress(step, seconds):
+        """How far training is along its budget, in [0, 1]: steps or, with --minutes, time, whichever is further."""
+        return min(1.0, max(step / a.steps, seconds / budget if budget else 0.0))
+
+    def lr_at(step, seconds=0.0):
         if step < a.warmup:
             return a.lr * (step + 1) / a.warmup
-        x = (step - a.warmup) / max(1, a.steps - a.warmup)
+        p0 = progress(a.warmup, 0.0)    # the cosine runs from the end of the warmup to the end of the budget
+        x = (progress(step, seconds) - p0) / max(1e-9, 1 - p0)
         return a.min_lr + 0.5 * (a.lr - a.min_lr) * (1 + math.cos(math.pi * min(1.0, x)))
 
     def save(path, step, metrics):
-        save_atomic(dict(model=net.state_dict(), hparams=net.hparams, pbs_version=pbs.PBS_VERSION, step=step,
+        save_atomic(dict(model=net.state_dict(), hparams=net.hparams, pbs_version=a.pbs, step=step,
                          metrics=metrics, config=config, complete=False), path)
 
     best, best_step = float("inf"), None
@@ -265,11 +302,14 @@ def main(argv=None):
     err0 = evaluate(net, data, va_idx, device)
     print(f"held out: constant 0.5 predictor rw_mae {err0['const_rw_abs'].mean():.4f}", flush=True)
     write(dict(kind="baseline", const_rw_mae=float(err0["const_rw_abs"].mean())))
-    running, t_last = 0.0, time.time()
+    running, t_last, train_seconds, step = 0.0, time.time(), 0.0, 0
     n_tr = len(tr_idx)
-    for step in range(1, a.steps + 1):
+    while True:
+        step += 1
+        t_step = time.time()
+        lr = lr_at(step, train_seconds)
         for g in opt.param_groups:
-            g["lr"] = lr_at(step)
+            g["lr"] = lr
         b = torch.as_tensor(rng.integers(0, n_tr, a.batch), device=device)
         pred = net(dev["pub"][b], dev["ranges"][b])
         loss = losses(pred, dev["values"][b], dev["ranges"][b], dev["mask"][b], a.huber, all_w[b])
@@ -278,12 +318,14 @@ def main(argv=None):
         torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
         opt.step()
         running += loss.item()
+        train_seconds += time.time() - t_step
+        last = progress(step, train_seconds) >= 1.0
         if step % a.log_every == 0:
-            rec = dict(kind="train", step=step, loss=running / a.log_every, lr=lr_at(step),
-                       steps_per_sec=a.log_every / (time.time() - t_last))
+            rec = dict(kind="train", step=step, loss=running / a.log_every, lr=lr,
+                       steps_per_sec=a.log_every / (time.time() - t_last), train_seconds=train_seconds)
             write(rec)
             running, t_last = 0.0, time.time()
-        if step % a.eval_every == 0 or step == a.steps:
+        if step % a.eval_every == 0 or last:
             m = summarize(evaluate(net, data, va_idx, device), va_plies, all_counted[va_idx])
             write(dict(kind="val", step=step, **m))
             al = m["all"]
@@ -295,9 +337,12 @@ def main(argv=None):
             if al["rw_mae"] < best:
                 best, best_step = al["rw_mae"], step
                 save(ck_dir / "best.pt", step, m)
+            t_last = time.time()
+        if last:
+            break
     test_mae = None
     if best_step is None:
-        raise SystemExit(f"{a.name}: no finite validation error in {a.steps} steps: no best.pt")
+        raise SystemExit(f"{a.name}: no finite validation error in {step} steps: no best.pt")
     ck = torch.load(ck_dir / "best.pt", map_location="cpu", weights_only=False)
     if len(te_idx):
         # best.pt's error on labels used neither for training nor for picking it.
@@ -308,7 +353,7 @@ def main(argv=None):
         test_mae = m["all"]["rw_mae"]
     ck["complete"] = True       # written last: the training ran to its end
     save_atomic(ck, ck_dir / "best.pt")
-    write(dict(kind="done", step=a.steps, best_step=best_step, seconds=time.time() - t0))
+    write(dict(kind="done", step=step, best_step=best_step, seconds=time.time() - t0, train_seconds=train_seconds))
     print(f"done in {time.time() - t0:.0f}s; best.pt: step {best_step}, val rw_mae {best:.4f} (selection), test rw_mae "
           f"{'n/a' if test_mae is None else f'{test_mae:.4f}'}; checkpoints in {ck_dir}", flush=True)
     return best

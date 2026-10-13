@@ -27,7 +27,7 @@ use crate::python::Game;
 use crate::state::{DECK_CAP, State};
 
 /// A zeroed bytearray of `len` elements of `T`.
-fn zeroed<'py, T>(py: Python<'py>, len: usize) -> PyResult<Bound<'py, PyByteArray>> {
+pub(crate) fn zeroed<'py, T>(py: Python<'py>, len: usize) -> PyResult<Bound<'py, PyByteArray>> {
     PyByteArray::new_with(py, len * size_of::<T>(), |_| Ok(()))
 }
 
@@ -36,7 +36,7 @@ fn zeroed<'py, T>(py: Python<'py>, len: usize) -> PyResult<Bound<'py, PyByteArra
 /// Safety: `buf` must be a bytearray created by [`zeroed`] that no Python code has seen yet (nothing else can
 /// read, write or resize it while the slice lives), and `T` a plain number type.
 #[allow(clippy::mut_from_ref)]
-unsafe fn slice_mut<'a, T>(buf: &'a Bound<'_, PyByteArray>) -> PyResult<&'a mut [T]> {
+pub(crate) unsafe fn slice_mut<'a, T>(buf: &'a Bound<'_, PyByteArray>) -> PyResult<&'a mut [T]> {
     let bytes = unsafe { buf.as_bytes_mut() };
     let (head, body, tail) = unsafe { bytes.align_to_mut::<T>() };
     if !head.is_empty() || !tail.is_empty() {
@@ -79,7 +79,7 @@ fn disjoint<const N: usize>(spans: [(usize, usize); N]) -> PyResult<[(usize, usi
 }
 
 /// `numpy.frombuffer(buf, dtype).reshape(shape)`: a writable array sharing the bytearray's memory.
-fn ndarray<'py>(buf: &Bound<'py, PyByteArray>, dtype: &str, shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
+pub(crate) fn ndarray<'py>(buf: &Bound<'py, PyByteArray>, dtype: &str, shape: &[usize]) -> PyResult<Bound<'py, PyAny>> {
     let np = buf.py().import("numpy")?;
     np.getattr("frombuffer")?.call1((buf, dtype))?.call_method1("reshape", (shape.to_vec(),))
 }
@@ -98,7 +98,7 @@ fn i64s(obj: &Bound<'_, PyAny>) -> PyResult<Vec<i64>> {
     Ok(words(obj, "int64")?.into_iter().map(i64::from_ne_bytes).collect())
 }
 
-fn u64s(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u64>> {
+pub(crate) fn u64s(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u64>> {
     Ok(words(obj, "uint64")?.into_iter().map(u64::from_ne_bytes).collect())
 }
 

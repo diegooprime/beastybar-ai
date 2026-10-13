@@ -2,6 +2,8 @@
 //! `bbar._core` by the module init in `python.rs`.
 //!
 //! - `markov_key(game)`, `public_key(game)`: the `u64` keys of `markov.rs`.
+//! - `option_features(keys, threads=0)`, `option_feature_names()`: what each animal would do if played now, per
+//!   public key (`options.rs`; the PBS value network's v2 inputs).
 //! - `pi_value(game)`: exact value for player 0 (0, .5 or 1) of a game whose decks are both empty.
 //! - `frontier_values(game, k=4)`: `[(hand, value), ...]` for player 0, one per possible hand of the mover in
 //!   increasing rank, at a node where the opponent's hand is public and the mover's deck holds at most one card
@@ -26,8 +28,10 @@ use crate::NUM_ACTIONS;
 use crate::animal::{NAMES, animal_id};
 use crate::hands::{num_hands, rank, unplayed, unrank};
 use crate::markov;
+use crate::options;
 use crate::pisolve::PiSolver;
 use crate::python::Game;
+use crate::python_env::{ndarray, slice_mut, u64s, zeroed};
 use crate::window::{Algo, Cfr, LeafQuery, Leaves, Window};
 
 static SOLVER: Mutex<Option<PiSolver>> = Mutex::new(None);
@@ -51,6 +55,28 @@ fn markov_key(game: PyRef<'_, Game>) -> u64 {
 #[pyfunction]
 fn public_key(game: PyRef<'_, Game>) -> u64 {
     markov::public_key(&game.state)
+}
+
+/// Option features of public keys (`options.rs`): float32 `[n, 2, 12, F]` (player to move, other; animal id;
+/// feature), computed on `threads` threads (0 = every core) with the GIL released. `keys`: any uint64 array-like.
+#[pyfunction]
+#[pyo3(signature = (keys, threads=0))]
+fn option_features<'py>(py: Python<'py>, keys: &Bound<'py, PyAny>, threads: usize) -> PyResult<Bound<'py, PyAny>> {
+    let keys = u64s(keys)?;
+    let n = keys.len();
+    let buf = zeroed::<f32>(py, n * options::ROW)?;
+    {
+        // Safety: a fresh bytearray, not yet visible to Python.
+        let out = unsafe { slice_mut::<f32>(&buf)? };
+        py.detach(|| options::option_features_many(&keys, out, threads));
+    }
+    ndarray(&buf, "float32", &[n, 2, NAMES.len(), options::F])
+}
+
+/// The names of the F option features of a (player, animal) row (`options.rs`).
+#[pyfunction]
+fn option_feature_names() -> Vec<String> {
+    options::feature_names()
 }
 
 /// Exact value for player 0 (1 win, .5 draw, 0 loss) of a game whose decks are both empty (all hands public).
@@ -111,6 +137,8 @@ fn hand_unrank(size: usize, rank: usize) -> PyResult<Vec<&'static str>> {
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(markov_key, m)?)?;
     m.add_function(wrap_pyfunction!(public_key, m)?)?;
+    m.add_function(wrap_pyfunction!(option_features, m)?)?;
+    m.add_function(wrap_pyfunction!(option_feature_names, m)?)?;
     m.add_function(wrap_pyfunction!(pi_value, m)?)?;
     m.add_function(wrap_pyfunction!(frontier_values, m)?)?;
     m.add_function(wrap_pyfunction!(hand_rank, m)?)?;
