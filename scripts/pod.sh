@@ -10,6 +10,7 @@
 #   scripts/pod.sh pull ID PATH          rsync PATH (relative to repo) back from the pod
 #   scripts/pod.sh backup ID             pull data/, checkpoints/ and runs/ into backups/<pod id>/ (no deletes): pods
 #                                        can vanish (e.g. when the account balance runs out), so back up often
+#   scripts/pod.sh autobackup ID [MIN]   backup every MIN minutes (default 10) until the pod is gone
 #   scripts/pod.sh push ID PATH          rsync PATH (relative to repo) to the pod (e.g. a checkpoint: sync skips them)
 #   scripts/pod.sh down ID               delete the pod
 set -euo pipefail
@@ -116,6 +117,10 @@ except Exception: pass' 2>/dev/null || true)
       rsync -az -e "ssh ${SSH_OPTS[*]} -p $port" --exclude '*.tmp.npz' "$host:$REMOTE/$d" "$REPO/backups/$id/" 2>/dev/null || true
     done
     du -sh "$REPO/backups/$id" ;;
+  autobackup)
+    id=$1; every=${2:-10}
+    while target "$id" >/dev/null; do "$0" backup "$id" >/dev/null 2>&1 || true; sleep $((60 * every)); done
+    echo "pod $id is gone; last backup in backups/$id" ;;
   down)
     runpodctl pod delete "$1" ;;
   *)
