@@ -5,18 +5,21 @@ operations log for the one-day $50 compute push (deadline ~23:30 UTC, then no mo
 
 ## Pods (scripts/pod.sh status shows load and jobs; addresses cached in $TMPDIR/bbar-pod-targets)
 
-| id | name | GPU | vCPU | $/hr | job |
+| id | name | GPU | vCPU | $/hr | job (20:05 UTC) |
 |---|---|---|---|---|---|
-| ulq9kbd5vy7dux | bb-cascade | 2xA40 | 21 | 1.18 | exact ply-9 labels (x9b, seed 55); hub for training |
-| hqxg7gb65gwyn7 | bb-eval | 4090 | 12 | 0.89 | matches: resolve F=9 vs F=10 (v3h, P0=8, 300 deals, seed 71) |
-| 59uyapmvn5edyp | bb-x9 | 2xA40 | 19 | 1.18 | exact ply-9 labels (seed 51) |
-| 5e1w9a89lkgyni | bb-h1 | A40 | 9 | 0.59 | exact ply-9 labels (seed 52) |
-| l2g2inejf282uk | bb-h2 | 4090 | 16 | 0.89 | exact ply-9 labels (seed 53) |
-| yx303cn3c0gitu | bb-h3 | L40S | 32 | 1.09 | exact ply-9 labels (seed 54) |
+| ulq9kbd5vy7dux | bb-cascade | 2xA40 | 21 | 1.18 | HUB: fast cascade labels plies 8-9 (c5-p8-9), then trains c5-1 |
+| hqxg7gb65gwyn7 | bb-eval | 4090 | 12 | 0.89 | delta_8: blueprint, then resolve v3h P0=8 F=10 |
+| 59uyapmvn5edyp | bb-x9 | 2xA40 | 19 | 1.18 | fast cascade labels plies 8-9 |
+| 5e1w9a89lkgyni | bb-h1 | A40 | 9 | 0.59 | fast cascade labels plies 8-9 |
+| l2g2inejf282uk | bb-h2 | 4090 | 16 | 0.89 | fast cascade labels plies 8-9 |
+| yx303cn3c0gitu | bb-h3 | L40S | 32 | 1.09 | fast cascade labels plies 8-9 |
+| kbzyl5qyif7wis | bb-h4 | L40S | 16 | 1.09 | fast cascade labels plies 8-9 |
+| 6wrlrhu9dkag90 | bb-h5 | 4090 | 12 | 0.89 | fast cascade labels plies 8-9 |
+| owfo950omfwmja | bb-h6 | A40 | 9 | 0.59 | fast cascade labels plies 8-9 |
 
-Exact ply-9 generators (restarted ~19:00 UTC): `bbar.value.gen --out data/value/x9 --plies 9 --ranges-per-state 2
---bayes 0.5 --shard-size 20 --target 1e-4 --minutes 70` -> each pod's data/value/x9. Laptop runs `pod.sh guard 2.5`
-(backs up and deletes all pods if balance < $2.5) and `pod.sh autobackup` per pod into backups/<id>/.
+Cascade labels: `bbar.value.cascade labels --net checkpoints/value/v3m/best.pt --out data/value/c5-p8-9 --plies 8,9
+--d 2 --max-leaf-ply 10 --iters 200 --jobs 128 --minutes ~28` (seeds 501-503, 511-515), ending ~20:31. Exact ply-9
+labels (x9, ~12k) are gathered on the hub. scripts/gather.sh HUB DIR -- PODS collects shards onto the hub.
 
 ## Data and networks (local copies in data/ and checkpoints/, all gitignored)
 
