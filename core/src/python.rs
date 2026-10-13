@@ -35,7 +35,7 @@ fn named(cards: &[u8]) -> Vec<(&'static str, u8)> {
 #[pyclass(module = "bbar._core", skip_from_py_object)]
 #[derive(Clone)]
 pub struct Game {
-    state: State,
+    pub(crate) state: State,
 }
 
 #[pymethods]
@@ -286,9 +286,10 @@ mod _core {
     #[pymodule_export]
     use super::{Game, arena_deal, bench, build_id, parse_spec, play_match};
 
-    /// Training bindings (VecEnv, observation layout): `python_env.rs`.
+    /// Training bindings (VecEnv, observation layout) in `python_env.rs`; solvers (Window etc.) in `python_solve.rs`.
     #[pymodule_init]
     fn init(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
-        crate::python_env::register(m)
+        crate::python_env::register(m)?;
+        crate::python_solve::register(m)
     }
 }

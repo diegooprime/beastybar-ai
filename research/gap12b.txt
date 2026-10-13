@@ -1,0 +1,2 @@
+pos 200: ply 12 internal 7015 leaves 48334 ranges 15x35 | value 0.236 | expl CFR+300 0.0000  PIMC 0.0079  PIMC-bayes 0.0015  uniform 0.4535  [794.3s]
+pos 201: ply 12 internal 7358 leaves 37147 ranges 35x15 | value 0.350 | expl CFR+300 0.0001  PIMC 0.0053  PIMC-bayes 0.0063  uniform 0.4325  [198.2s]
