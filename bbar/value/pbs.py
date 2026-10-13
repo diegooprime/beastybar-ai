@@ -138,8 +138,10 @@ def masks_of_keys(keys):
 
 # ---- root ranges ---------------------------------------------------------------------------------------------------
 
-RANGE_KINDS = ("uniform", "dirichlet0.1", "dirichlet0.3", "dirichlet1", "sparse", "peaked", "mixture")
+RANGE_KINDS = ("uniform", "dirichlet0.1", "dirichlet0.3", "dirichlet1", "sparse", "peaked", "mixture",
+               "bayes", "bayes-mix")   # the last two: Bayes ranges under a policy model (bbar/value/gen.py --bayes)
 RANGE_WEIGHTS = (0.10, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15)
+SYNTHETIC_KINDS = RANGE_KINDS[:len(RANGE_WEIGHTS)]   # what sample_range draws
 
 
 def _draw(kind, n, slots, rng):
@@ -165,9 +167,9 @@ def sample_range(unplayed, rng, kind=None):
     slots = feasible_slots(int(unplayed))
     n = len(slots)
     if kind is None:
-        kind = RANGE_KINDS[rng.choice(len(RANGE_KINDS), p=RANGE_WEIGHTS)]
+        kind = SYNTHETIC_KINDS[rng.choice(len(SYNTHETIC_KINDS), p=RANGE_WEIGHTS)]
     if kind == "mixture":
-        a, b = rng.choice(len(RANGE_KINDS) - 1, 2, replace=False)
+        a, b = rng.choice(len(SYNTHETIC_KINDS) - 1, 2, replace=False)
         lam = rng.uniform()
         w = lam * _normalized(_draw(RANGE_KINDS[a], n, slots, rng)) + (1 - lam) * _normalized(
             _draw(RANGE_KINDS[b], n, slots, rng))

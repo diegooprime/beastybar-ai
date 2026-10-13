@@ -30,6 +30,7 @@
   only, and its summary goes to the evidence trail (refused from uncommitted code unless --allow-dirty).
 """
 import json
+from pathlib import Path
 import shlex
 
 import numpy as np
@@ -245,7 +246,7 @@ def test_pbs_encoding_matches_the_solver(games):
                 slot = f[i * 14:(i + 1) * 14]
                 assert slot[pbs.ANIMAL_NAMES.index(a)] == 1 and slot[12 + (o != G.to_move)] == 1
             assert f[len(queue) * 14:56].sum() == 0
-            for kind in pbs.RANGE_KINDS:
+            for kind in pbs.SYNTHETIC_KINDS:
                 r, k = pbs.sample_range(uu[0, 0], rng, kind)
                 assert k == kind and abs(r.sum() - 1) < 1e-12 and np.all(r[~m[0]] == 0) and np.all(r >= 0)
 
@@ -314,6 +315,37 @@ def test_sampler_and_generator_shards(tmp_path):
 
 
 GEN_ARGS = ["--workers", "1", "--plies", "13", "--ply-weights", "1", "--blueprint", "", "--mix", "random:1"]
+
+
+def test_bayes_ranges_are_the_model_posterior(tmp_path):
+    """--bayes labels start with both players' exact Bayes ranges under the model ("bayes"), or those mixed with a
+    synthetic range ("bayes-mix"); either way only hands the player can hold carry mass."""
+    from bbar.belief import model_range, start_game
+    from bbar.policy import NetModel
+    ck = "checkpoints/bp-v1/step_8000.pt"
+    if not Path(ck).is_file():
+        pytest.skip("no blueprint checkpoint")
+    model = NetModel(ck, "cpu")
+    s = StateSampler(7, mix={"random": 1.0}, envs=3)
+    rng = np.random.default_rng(0)
+    for x in s.batch((12,)):
+        pair = gen.bayes_pair(model, x, rng)
+        _, _, u, _, _ = pbs.decode_keys([core.public_key(x.game)])
+        for p, (r, kind) in enumerate(pair):
+            assert kind in ("bayes", "bayes-mix") and abs(r.sum() - 1) < 1e-12
+            outside = np.ones(len(r), bool)
+            outside[pbs.feasible_slots(int(u[0, p]))] = False
+            assert np.all(r[outside] == 0)
+            if kind == "bayes":
+                assert np.allclose(r, model_range(model, start_game(x.start), x.actions, p).range)
+    summary = gen.main(["--out", str(tmp_path), "--labels", "6", "--ranges-per-state", "1", "--bayes", "1",
+                        "--bayes-model", ck, *GEN_ARGS])
+    from bbar.value.train import load_labels
+    d, _ = load_labels([str(tmp_path)])
+    kinds = {pbs.RANGE_KINDS[k] for k in d["kinds"].ravel()}
+    assert summary["labels"] >= 6 and kinds & {"bayes", "bayes-mix"}
+
+
 
 
 def test_generator_force_replaces_the_run(tmp_path):

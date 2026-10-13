@@ -10,7 +10,10 @@ Each worker process (one solver thread each) repeatedly:
   2. builds the exact window of each state (frontier leaves at ply 15) once, then for each of --ranges-per-state root
      range pairs drawn independently per player from the family of bbar/value/pbs.py (uniform, Dirichlet 0.1 / 0.3 /
      1, sparse supports, peaked around a hand, mixtures) solves it with DCFR until the exploitability of the average
-     strategy is at most --target;
+     strategy is at most --target. With --bayes F, a fraction F of the states get one extra pair first: both
+     players' exact Bayes ranges given the state's real move history, assuming both play the --bayes-model network
+     (bbar/belief.py: the beliefs an agent built on that network holds), half of them mixed with a synthetic range
+     (weight 0.05-0.5) for coverage (kinds "bayes" / "bayes-mix");
   3. labels it: per hand of each player, the best-response counterfactual value against the other's equilibrium
      strategy with the other's range normalised (= the hand's win probability; for hands in the range's support it
      equals the equilibrium value up to the solve's exploitability, and it is the right value for the others), plus
@@ -38,22 +41,25 @@ import numpy as np
 
 from bbar import provenance
 from bbar._core import Window, build_id, public_key
+from bbar.belief import model_range, start_game
 from bbar.value import pbs
 from bbar.value.sample import StateSampler, parse_mix
 
 POLICIES = ("random", "pimc", "bp")
 
 
-def label_state(game, n_ranges, rng, target, max_iters, algo="dcfr"):
-    """Labels of one public state: a list of dicts (see the module docstring) and the seconds spent."""
+def label_state(game, n_ranges, rng, target, max_iters, algo="dcfr", first=None):
+    """Labels of one public state: a list of dicts (see the module docstring) and the seconds spent. `first`: an
+    optional extra root range pair [(range, kind), (range, kind)] (absolute players) solved before the synthetic ones."""
     t0 = time.perf_counter()
     key = public_key(game)
     mover = game.to_move
     _, _, u, _, _ = pbs.decode_keys([key])
     w = Window(game, threads=1)
     out = []
-    for _ in range(n_ranges):
-        rk = [pbs.sample_range(u[0, p], rng) for p in (0, 1)]
+    pairs = ([first] if first else []) + [None] * n_ranges
+    for rk in pairs:
+        rk = rk or [pbs.sample_range(u[0, p], rng) for p in (0, 1)]
         w.set_ranges(rk[0][0], rk[1][0])
         t1 = time.perf_counter()
         res = w.solve(target=target, max_iters=max_iters, check_every=10, algo=algo)
@@ -67,6 +73,21 @@ def label_state(game, n_ranges, rng, target, max_iters, algo="dcfr"):
                                                  ((mover, 1 - mover))],
             seconds=time.perf_counter() - t1))
     return out, time.perf_counter() - t0
+
+
+def bayes_pair(model, sample, rng):
+    """Both players' exact Bayes ranges at `sample` assuming both play `model`; with probability 1/2 each is mixed
+    with a synthetic range of the family (weight 0.05-0.5). [(range float64 [495], kind)] per absolute player."""
+    start = start_game(sample.start)
+    mix = rng.random() < 0.5
+    pair = []
+    for p in (0, 1):
+        r = model_range(model, start, sample.actions, p).range
+        if mix:
+            lam = rng.uniform(0.05, 0.5)
+            r = (1 - lam) * r + lam * pbs.sample_range(pbs.decode_keys([public_key(sample.game)])[2][0, p], rng)[0]
+        pair.append((r / r.sum(), "bayes-mix" if mix else "bayes"))
+    return pair
 
 
 def write_shard(path, rows, meta):
@@ -90,6 +111,12 @@ def worker(args):
     rng = np.random.default_rng(seed)
     sampler = StateSampler(int(rng.integers(2 ** 63)), parse_mix(cfg["mix"]), cfg["blueprint"], envs=cfg["envs"],
                            explore=cfg["explore"])
+    model = None
+    if cfg["bayes"] > 0:
+        import torch
+        from bbar.policy import NetModel
+        torch.set_num_threads(1)
+        model = NetModel(cfg["bayes_model"], "cpu")
     plies = cfg["plies"]
     wmax = max(cfg["ply_weights"])
     keep = {p: w / wmax for p, w in zip(plies, cfg["ply_weights"])}
@@ -111,8 +138,11 @@ def worker(args):
         batch = sampler.batch(plies, keep)
         for i in rng.permutation(len(batch)):   # interleave the plies (the batch comes in ply order)
             ply, game, pol = batch[i].ply, batch[i].game, batch[i].policies
+            first = None
+            if model is not None and rng.random() < cfg["bayes"]:
+                first = bayes_pair(model, batch[i], rng)
             labels, secs = label_state(game, cfg["ranges_per_state"], rng, cfg["target"], cfg["max_iters"],
-                                       cfg["algo"])
+                                       cfg["algo"], first)
             st = stats[ply]
             st["states"] += 1
             st["seconds"] += secs
@@ -148,6 +178,9 @@ def main(argv=None):
     ap.add_argument("--blueprint", default="checkpoints/bp-v1/step_8000.pt",
                     help="blueprint checkpoint for 'bp' ('' = drop bp from the mix)")
     ap.add_argument("--explore", type=float, default=0.05, help="probability of a uniformly random move")
+    ap.add_argument("--bayes", type=float, default=0.0,
+                    help="fraction of states that also get both players' Bayes ranges under --bayes-model first")
+    ap.add_argument("--bayes-model", default="", help="network checkpoint for --bayes (default: --blueprint)")
     ap.add_argument("--envs", type=int, default=32, help="games per sampling batch in a worker")
     ap.add_argument("--shard-size", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=0)
@@ -167,6 +200,9 @@ def main(argv=None):
     blueprint = a.blueprint if a.blueprint and parse_mix(a.mix).get("bp", 0) > 0 else ""
     if blueprint and not Path(blueprint).is_file():
         ap.error(f"no blueprint checkpoint {blueprint} (pass --blueprint '' to drop bp from the mix)")
+    bayes_model = a.bayes_model or a.blueprint
+    if a.bayes > 0 and not Path(bayes_model).is_file():
+        ap.error(f"--bayes needs a network checkpoint (--bayes-model or --blueprint): {bayes_model!r} not found")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     old = sorted(out.glob(f"s{a.seed}-w*.npz"))       # shards of this seed (and unfinished .tmp.npz ones)
@@ -182,6 +218,7 @@ def main(argv=None):
     workers = max(1, a.workers)
     cfg = dict(out=str(out), plies=plies, ply_weights=weights, ranges_per_state=a.ranges_per_state, target=a.target,
                max_iters=a.max_iters, algo=a.algo, mix=a.mix, blueprint=blueprint, explore=a.explore, envs=a.envs,
+               bayes=a.bayes, bayes_model=bayes_model if a.bayes > 0 else "",
                shard_size=a.shard_size, seed=a.seed, minutes=a.minutes,
                labels_per_worker=-(-a.labels // workers))
     meta = dict(kind="value-labels", pbs_version=pbs.PBS_VERSION, revision=provenance.revision(), build=build_id(),
@@ -189,6 +226,7 @@ def main(argv=None):
                 command=shlex.join(["python", *sys.orig_argv[1:]]) if argv is None else
                 shlex.join(["python", "-m", "bbar.value.gen", *argv]),
                 blueprint_sha256=_sha(blueprint) if blueprint else None,
+                bayes_model_sha256=_sha(bayes_model) if a.bayes > 0 else None,
                 range_kinds=list(pbs.RANGE_KINDS), policies=list(POLICIES),
                 created=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     print(f"generating {a.labels} labels at plies {plies} with {workers} workers into {out}", flush=True)

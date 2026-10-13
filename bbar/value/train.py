@@ -50,7 +50,7 @@ def load_labels(sources):
     paths = shard_paths(sources)
     if not paths:
         raise SystemExit(f"no shards in {sources}")
-    cols = {k: [] for k in ("key", "start", "ply", "ranges", "values", "game_value", "exploitability")}
+    cols = {k: [] for k in ("key", "start", "ply", "ranges", "values", "game_value", "exploitability", "kinds")}
     for p in paths:
         with np.load(p) as z:
             for k in cols:
