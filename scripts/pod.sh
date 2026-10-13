@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Drive RunPod pods from the laptop. All computation runs on pods; stop them when idle.
 #
-#   scripts/pod.sh up NAME [GPU_ID]      create a pod (tries community, then secure), wait for ssh, print its id
+#   scripts/pod.sh up NAME [GPU_ID]      create a pod (CLOUDS="COMMUNITY SECURE" order), wait for ssh, print its id
 #   scripts/pod.sh setup ID              sync the repo, install rust, build the engine, check golden
 #   scripts/pod.sh sync ID               rsync the repo to /workspace/beastybar-ai (no .git, .venv, target, runs),
 #                                        write its provenance to REVISION there, rebuild the engine if needed
@@ -48,7 +48,7 @@ cmd=${1:-}; shift || true
 case "$cmd" in
   up)
     name=$1; gpu=${2:-"NVIDIA GeForce RTX 4090"}
-    for cloud in COMMUNITY SECURE; do
+    for cloud in ${CLOUDS:-COMMUNITY SECURE}; do
       out=$(runpodctl pod create --name "$name" --template-id runpod-torch-v280 --gpu-id "$gpu" \
             --cloud-type "$cloud" --container-disk-in-gb 40 2>&1 || true)
       id=$(echo "$out" | python3 -c 'import json,sys
@@ -82,7 +82,7 @@ except Exception: pass' 2>/dev/null || true)
       command -v cargo >/dev/null || [ -x ~/.cargo/bin/cargo ] || curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal
       source ~/.cargo/env
       cd $REMOTE
-      pip install -q maturin numpy pytest 2>&1 | tail -1
+      pip install -q --break-system-packages maturin numpy pytest 2>&1 | tail -1
       PYTHON=python scripts/build_core.sh
       python -m bbar.golden --engine core'" ;;
   ssh)
