@@ -444,3 +444,19 @@ def test_e2_costs_and_evidence_trail(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         e2.main(args)
     assert not trail.exists()
+
+
+def test_hand_net_is_zero_sum_and_round_trips(tmp_path):
+    import torch
+    from bbar.value.net import load_value_net, make_value_net
+    torch.manual_seed(0)
+    net = make_value_net("hand", width=32, blocks=1, hand_width=16)
+    pub = torch.rand(4, pbs.PUB_DIM)
+    r = torch.rand(4, 2, pbs.SLOTS)
+    r = r / r.sum(-1, keepdim=True)
+    v = net(pub, r)
+    assert v.shape == (4, 2, pbs.SLOTS) and torch.allclose((r * v).sum((1, 2)), torch.ones(4), atol=1e-5)
+    path = tmp_path / "hand.pt"
+    torch.save(dict(model=net.state_dict(), hparams=net.hparams, pbs_version=pbs.PBS_VERSION), path)
+    back, _ = load_value_net(path)
+    assert torch.allclose(back(pub, r), v.detach())

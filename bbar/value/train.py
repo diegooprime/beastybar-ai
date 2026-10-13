@@ -32,7 +32,7 @@ import torch
 
 from bbar import provenance
 from bbar.value import pbs
-from bbar.value.net import ValueNet
+from bbar.value.net import ARCHS, make_value_net
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -127,6 +127,9 @@ def main(argv=None):
     ap.add_argument("--min-lr", type=float, default=1e-5)
     ap.add_argument("--warmup", type=int, default=500)
     ap.add_argument("--weight-decay", type=float, default=1e-4)
+    ap.add_argument("--arch", default="mlp", choices=sorted(ARCHS), help="mlp: 990-way linear head; hand: shared "
+                    "per-hand head (bbar/value/net.py)")
+    ap.add_argument("--hand-width", type=int, default=256, help="--arch hand: width of the per-hand head")
     ap.add_argument("--width", type=int, default=512)
     ap.add_argument("--blocks", type=int, default=3)
     ap.add_argument("--expansion", type=int, default=1)
@@ -170,7 +173,9 @@ def main(argv=None):
     # Training tensors on the device (a few KB per label).
     dev = {k: torch.as_tensor(data[k][tr_idx]).to(device) for k in ("pub", "ranges", "values", "mask")}
 
-    net = ValueNet(a.width, a.blocks, a.expansion, zero_sum=not a.no_zero_sum).to(device)
+    extra = {"hand_width": a.hand_width} if a.arch == "hand" else {}
+    net = make_value_net(a.arch, width=a.width, blocks=a.blocks, expansion=a.expansion, zero_sum=not a.no_zero_sum,
+                         **extra).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=a.weight_decay)
     nparams = sum(p.numel() for p in net.parameters())
     revision = provenance.revision()
