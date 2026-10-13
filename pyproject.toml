@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "bbar"
+version = "0.1.0"
+description = "Beasty Bar AI"
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+
+[tool.maturin]
+manifest-path = "core/Cargo.toml"
+module-name = "bbar._core"
+python-source = "."
+include = ["bbar/**/*.py"]
+features = ["pyo3/extension-module"]

@@ -1,0 +1,18 @@
+[package]
+name = "bbcore"
+version = "0.1.0"
+edition = "2024"
+description = "Beasty Bar game engine with Python bindings (bbar._core)"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Optional so that `cargo test` builds without Python; maturin enables it via the
+# `pyo3/extension-module` feature in pyproject.toml.
+pyo3 = { version = "0.29", features = ["abi3-py310"], optional = true }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
