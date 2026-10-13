@@ -259,6 +259,9 @@ pub struct TreeNode {
 pub struct WindowTree {
     pub k: usize,
     pub leaves: Leaves,
+    /// Depth of the value leaves of a depth-limited window ([`crate::window::Window::build_cut`]), if any: nodes there
+    /// are leaves (no entries).
+    pub cut: Option<usize>,
     /// Public positions of the history up to the root (the last one is the root).
     pub publics: Vec<State>,
     pub root_actions: Vec<u8>,
@@ -284,6 +287,21 @@ pub fn is_leaf(s: &State, k: usize, leaves: Leaves) -> bool {
 impl WindowTree {
     /// The window below the position reached by `actions` from `start`.
     pub fn new(start: &State, actions: &[u8], k: usize, leaves: Leaves) -> Result<WindowTree, String> {
+        WindowTree::new_cut(start, actions, k, leaves, None)
+    }
+
+    /// [`WindowTree::new`] for a depth-limited window: nodes `cut` moves below the root are value leaves, as in
+    /// [`crate::window::Window::build_cut`] (same layout).
+    pub fn new_cut(
+        start: &State,
+        actions: &[u8],
+        k: usize,
+        leaves: Leaves,
+        cut: Option<usize>,
+    ) -> Result<WindowTree, String> {
+        if cut == Some(0) {
+            return Err("the cut depth must be at least 1 (the root cannot be a value leaf)".into());
+        }
         if actions.len() > MAX_PLIES {
             return Err(format!("{} actions: a game has at most {MAX_PLIES}", actions.len()));
         }
@@ -292,6 +310,7 @@ impl WindowTree {
         let mut t = WindowTree {
             k,
             leaves,
+            cut,
             publics,
             root_actions: actions.to_vec(),
             root_hist,
@@ -311,7 +330,7 @@ impl WindowTree {
     }
 
     fn walk(&mut self, s: State, parent: u32, action: u8, depth: usize) {
-        if s.is_over() || is_leaf(&s, self.k, self.leaves) {
+        if s.is_over() || is_leaf(&s, self.k, self.leaves) || self.cut == Some(depth) {
             return;
         }
         let id = self.nodes.len();

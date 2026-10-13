@@ -1,4 +1,4 @@
-"""Train the PBS value network on exact labels (bbar/value/gen.py shards).
+"""Train the PBS value network on exact labels (bbar/value/gen.py shards) and cascade labels (bbar/value/cascade.py).
 
     python -m bbar.value.train --name NAME --data data/value/A [data/value/B ...] [--steps 20000] [--batch 1024]
         [--width 512 --blocks 3 --expansion 1] [--lr 1e-3] [--device auto] [--val-permille 50] [--test-permille 50]
@@ -6,21 +6,28 @@
 Model: bbar/value/net.py (residual MLP, sigmoid outputs, zero-sum shift unless --no-zero-sum). Loss per label:
 range-weighted Huber over both players' hands, sum_p sum_h b_p(h) huber(v_p(h) - y_p(h)) / 2, plus --all-weight times
 the mean Huber over all feasible hands (hands outside the ranges still matter: they are the values of deviations).
+That second term needs labels that are right for every hand: a shard whose meta says all_hands_exact = false
+(cascade shards: their values for hands with zero or tiny range mass are not gen.py's, bbar/value/cascade.py) gets
+--cascade-all-weight (default 0) instead, and its labels count in all_mae only when that weight is positive.
 Two held-out splits of whole public states (hash bucket of the public key, so range draws of one state never
 straddle a split): the validation split (--val-permille) picks best.pt; the test split (--test-permille, the next
 buckets) is used once, to report best.pt's error, which the selection does not bias. Metrics, overall and per ply:
-range-weighted MAE and RMSE of the per-hand values (rw_mae, rw_rmse), MAE over all feasible hands (all_mae), and the
-error of the game value b_m . v_m against the label (gv_mae, gv_rmse); the constant-0.5 predictor's rw_mae is logged
-once for scale.
+range-weighted MAE and RMSE of the per-hand values (rw_mae, rw_rmse), MAE over all feasible hands (all_mae, None
+where no label of the selection has all-hands values), and the error of the game value b_m . v_m against the label
+(gv_mae, gv_rmse); the constant-0.5 predictor's rw_mae is logged once for scale.
 
-Outputs: runs/value/NAME/metrics.jsonl (config line, then train and val lines, and a final test line: best.pt's
-metrics on the test split), checkpoints/value/NAME/{latest.pt, best.pt} (best by overall val rw_mae; best.pt also
-holds its test metrics) with the hyperparameters, PBS version, data files and provenance.
+Outputs: runs/value/NAME/metrics.jsonl (config line, then train and val lines, a test line: best.pt's metrics on the
+test split, and a final done line), checkpoints/value/NAME/{latest.pt, best.pt} (best by overall val rw_mae) with the
+hyperparameters, PBS version, data files and provenance. Checkpoints are written atomically; best.pt is rewritten
+whenever validation improves, and once more at the end with its test metrics and complete=True: only then is the
+training finished (is_complete; bbar/value/cascade.py's --resume relies on it). A new run of NAME deletes NAME's old
+checkpoints before its first step.
 """
 import argparse
 import glob
 import json
 import math
+import os
 import shlex
 import socket
 import sys
@@ -45,16 +52,26 @@ def shard_paths(sources):
     return [x for x in out if not x.endswith(".tmp.npz")]
 
 
+def all_hands_exact(meta):
+    """Whether a shard's values are labels for every feasible hand (gen.py), not only on the ranges (cascade.py)."""
+    return bool(meta.get("all_hands_exact", meta.get("kind") != "cascade-labels"))
+
+
 def load_labels(sources):
-    """Concatenated label arrays of every shard, with the PBS public features and feasibility masks."""
+    """Concatenated label arrays of every shard, with the PBS public features, feasibility masks and all_exact (bool
+    per label: its shard's all_hands_exact)."""
     paths = shard_paths(sources)
     if not paths:
         raise SystemExit(f"no shards in {sources}")
-    cols = {k: [] for k in ("key", "start", "ply", "ranges", "values", "game_value", "exploitability", "kinds")}
+    cols = {k: [] for k in ("key", "start", "ply", "ranges", "values", "game_value", "exploitability", "kinds",
+                            "all_exact")}
     for p in paths:
         with np.load(p) as z:
             for k in cols:
-                cols[k].append(z[k])
+                if k != "all_exact":
+                    cols[k].append(z[k])
+            meta = json.loads(z["meta"].item()) if "meta" in z.files else {}
+            cols["all_exact"].append(np.full(len(z["key"]), all_hands_exact(meta)))
     d = {k: np.concatenate(v) for k, v in cols.items()}
     d["pub"] = pbs.public_features(d["key"], d["start"])
     d["mask"] = pbs.masks_of_keys(d["key"])
@@ -74,6 +91,7 @@ def huber(x, delta):
 
 
 def losses(pred, y, r, mask, delta, all_weight):
+    """Mean loss of a batch; all_weight: a number or a tensor [batch] (per-label weight of the all-hands term)."""
     h = huber(pred - y, delta)
     rw = (r * h).sum((1, 2)) / 2
     m = mask.float()
@@ -104,16 +122,44 @@ def evaluate(net, data, idx, device, batch=4096):
     return {k: np.concatenate(v) for k, v in out.items()}
 
 
-def summarize(err, plies):
+def summarize(err, plies, all_exact=None):
+    """Metrics overall and per ply; all_mae only over labels with all_exact (default: all), None if there are none."""
+    all_exact = np.ones(len(plies), bool) if all_exact is None else np.asarray(all_exact, bool)
+
     def stats(sel):
+        sa = sel & all_exact
         return dict(n=int(sel.sum()), rw_mae=float(err["rw_abs"][sel].mean()),
-                    rw_rmse=float(math.sqrt(err["rw_sq"][sel].mean())), all_mae=float(err["all_abs"][sel].mean()),
+                    rw_rmse=float(math.sqrt(err["rw_sq"][sel].mean())),
+                    all_mae=float(err["all_abs"][sa].mean()) if sa.any() else None,
                     gv_mae=float(np.abs(err["gv_err"][sel]).mean()),
                     gv_rmse=float(math.sqrt((err["gv_err"][sel] ** 2).mean())))
     out = {"all": stats(np.ones(len(plies), bool))}
     for p in sorted(set(plies.tolist())):
         out[str(p)] = stats(plies == p)
     return out
+
+
+def all_weights(all_exact, all_weight, cascade_all_weight):
+    """Per-label weight of the all-feasible-hands term: all_weight where the label's values are right for every hand,
+    cascade_all_weight where only on the ranges (module docstring)."""
+    return np.where(np.asarray(all_exact, bool), all_weight, cascade_all_weight)
+
+
+def save_atomic(obj, path):
+    """torch.save through a temporary file: an interruption never leaves a truncated checkpoint at `path`."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
+
+
+def is_complete(path):
+    """Whether `path` is the best.pt of a training that ran to its end (complete=True, written last)."""
+    try:
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception:       # missing, or not a checkpoint
+        return False
+    return isinstance(ck, dict) and ck.get("complete") is True
 
 
 def main(argv=None):
@@ -133,6 +179,9 @@ def main(argv=None):
     ap.add_argument("--no-zero-sum", action="store_true")
     ap.add_argument("--huber", type=float, default=0.1, help="Huber delta")
     ap.add_argument("--all-weight", type=float, default=0.1, help="weight of the all-feasible-hands term")
+    ap.add_argument("--cascade-all-weight", type=float, default=0.0,
+                    help="weight of that term for labels whose values are right on the ranges only (shards with "
+                         "all_hands_exact false: cascade labels)")
     ap.add_argument("--val-permille", type=int, default=50,
                     help="validation share of public states (checkpoint selection), per mille")
     ap.add_argument("--test-permille", type=int, default=50,
@@ -169,17 +218,27 @@ def main(argv=None):
           f"plies {np.bincount(data['ply']).nonzero()[0].tolist()}; device {device}", flush=True)
     # Training tensors on the device (a few KB per label).
     dev = {k: torch.as_tensor(data[k][tr_idx]).to(device) for k in ("pub", "ranges", "values", "mask")}
+    all_w = torch.as_tensor(all_weights(data["all_exact"][tr_idx], a.all_weight, a.cascade_all_weight),
+                            dtype=torch.float32).to(device)
+    # all_mae counts a label when the all-hands term trains on it.
+    all_counted = data["all_exact"] | (a.cascade_all_weight > 0)
+    n_partial = int((~data["all_exact"]).sum())
+    if n_partial:
+        print(f"{n_partial} labels with values right on the ranges only (cascade): all-hands weight "
+              f"{a.cascade_all_weight}", flush=True)
 
     net = ValueNet(a.width, a.blocks, a.expansion, zero_sum=not a.no_zero_sum).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=a.weight_decay)
     nparams = sum(p.numel() for p in net.parameters())
     revision = provenance.revision()
     config = dict(vars(a), device=str(device), params=nparams, data_files=[str(p) for p in paths],
-                  n_train=len(tr_idx), n_val=len(va_idx), n_test=len(te_idx), revision=revision,
+                  n_train=len(tr_idx), n_val=len(va_idx), n_test=len(te_idx), n_partial=n_partial, revision=revision,
                   host=socket.gethostname(),
                   command=shlex.join(["python", *sys.orig_argv[1:]]) if argv is None else
                   shlex.join(["python", "-m", "bbar.value.train", *argv]), pbs_version=pbs.PBS_VERSION)
     log = open(run_dir / "metrics.jsonl", "w")
+    for old in ("best.pt", "latest.pt"):     # a previous run's checkpoints must not pass for this run's
+        (ck_dir / old).unlink(missing_ok=True)
 
     def write(rec):
         log.write(json.dumps(rec) + "\n")
@@ -193,8 +252,8 @@ def main(argv=None):
         return a.min_lr + 0.5 * (a.lr - a.min_lr) * (1 + math.cos(math.pi * min(1.0, x)))
 
     def save(path, step, metrics):
-        torch.save(dict(model=net.state_dict(), hparams=net.hparams, pbs_version=pbs.PBS_VERSION, step=step,
-                        metrics=metrics, config=config), path)
+        save_atomic(dict(model=net.state_dict(), hparams=net.hparams, pbs_version=pbs.PBS_VERSION, step=step,
+                         metrics=metrics, config=config, complete=False), path)
 
     best, best_step = float("inf"), None
     va_plies = data["ply"][va_idx]
@@ -208,7 +267,7 @@ def main(argv=None):
             g["lr"] = lr_at(step)
         b = torch.as_tensor(rng.integers(0, n_tr, a.batch), device=device)
         pred = net(dev["pub"][b], dev["ranges"][b])
-        loss = losses(pred, dev["values"][b], dev["ranges"][b], dev["mask"][b], a.huber, a.all_weight)
+        loss = losses(pred, dev["values"][b], dev["ranges"][b], dev["mask"][b], a.huber, all_w[b])
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
@@ -220,26 +279,31 @@ def main(argv=None):
             write(rec)
             running, t_last = 0.0, time.time()
         if step % a.eval_every == 0 or step == a.steps:
-            m = summarize(evaluate(net, data, va_idx, device), va_plies)
+            m = summarize(evaluate(net, data, va_idx, device), va_plies, all_counted[va_idx])
             write(dict(kind="val", step=step, **m))
             al = m["all"]
+            all_mae = "n/a" if al["all_mae"] is None else f"{al['all_mae']:.4f}"
             print(f"step {step}: val rw_mae {al['rw_mae']:.4f} rw_rmse {al['rw_rmse']:.4f} all_mae "
-                  f"{al['all_mae']:.4f} gv_mae {al['gv_mae']:.4f}  " +
+                  f"{all_mae} gv_mae {al['gv_mae']:.4f}  " +
                   " ".join(f"p{p}:{v['rw_mae']:.4f}" for p, v in m.items() if p != "all"), flush=True)
             save(ck_dir / "latest.pt", step, m)
             if al["rw_mae"] < best:
                 best, best_step = al["rw_mae"], step
                 save(ck_dir / "best.pt", step, m)
     test_mae = None
-    if len(te_idx) and best_step is not None:
+    if best_step is None:
+        raise SystemExit(f"{a.name}: no finite validation error in {a.steps} steps: no best.pt")
+    ck = torch.load(ck_dir / "best.pt", map_location="cpu", weights_only=False)
+    if len(te_idx):
         # best.pt's error on labels used neither for training nor for picking it.
-        ck = torch.load(ck_dir / "best.pt", map_location="cpu", weights_only=False)
         net.load_state_dict(ck["model"])
-        m = summarize(evaluate(net, data, te_idx, device), data["ply"][te_idx])
+        m = summarize(evaluate(net, data, te_idx, device), data["ply"][te_idx], all_counted[te_idx])
         write(dict(kind="test", step=best_step, **m))
         ck["test_metrics"] = m
-        torch.save(ck, ck_dir / "best.pt")
         test_mae = m["all"]["rw_mae"]
+    ck["complete"] = True       # written last: the training ran to its end
+    save_atomic(ck, ck_dir / "best.pt")
+    write(dict(kind="done", step=a.steps, best_step=best_step, seconds=time.time() - t0))
     print(f"done in {time.time() - t0:.0f}s; best.pt: step {best_step}, val rw_mae {best:.4f} (selection), test rw_mae "
           f"{'n/a' if test_mae is None else f'{test_mae:.4f}'}; checkpoints in {ck_dir}", flush=True)
     return best

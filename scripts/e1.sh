@@ -8,6 +8,9 @@
 #   scripts/pod.sh bg $id e1-bp scripts/e1.sh nn:checkpoints/bp-v1/step_8000.pt
 #   scripts/pod.sh bg $id e1-tail scripts/e1.sh tail:nn:checkpoints/bp-v1/step_8000.pt,F=10,mode=gadget,cache=256
 #   scripts/pod.sh bg $id e1-pimc scripts/e1.sh pimc:w=8,d=4 --T 12,11,10 --N 100   # built-in specs are slower
+#   scripts/pod.sh bg $id e1-rs scripts/e1.sh \
+#       resolve:V=checkpoints/value/v1/best.pt,base=nn:checkpoints/bp-v1/step_30518.pt,P0=8,F=10,mode=safe,workers=8 \
+#       --T 9,8 --N 100                     # T in [P0, F): one exact ply-10 window per ply-10 node (~25-100 per T)
 #   scripts/pod.sh ssh $id tail -n 8 runs/e1-bp.log                        # summary table at the end
 #   scripts/pod.sh pull $id runs/delta                                     # JSON lines with provenance
 #   scripts/pod.sh down $id                                                # stop paying

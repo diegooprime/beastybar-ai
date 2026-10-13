@@ -242,3 +242,123 @@ fn leaf_values_average_with_the_average_strategy_weights() {
         assert!(checked > 0);
     }
 }
+
+#[test]
+fn gadget_in_external_mode_without_value_leaves_is_the_ordinary_gadget() {
+    // A re-solving gadget driven by ext_begin / ext_end on a window without value leaves is the iterated gadget,
+    // bit for bit: same opponent root reach (prior x follow), same updates.
+    let mut rng = Rng::new(11);
+    for (ply, cut) in [(12, Some(3)), (13, Some(2))] {
+        let s = random_position(&mut rng, ply);
+        let w = Window::build(&s, 4, Leaves::Frontier, 1).unwrap();
+        let dl = Window::build_cut(&s, 4, Leaves::Frontier, cut, 1).unwrap();
+        assert!(dl.value_leaves.is_empty());
+        let ranges = random_ranges(&w, &mut rng);
+        let prof = hashed_profile(&w, rng.next_u64());
+        for player in 0..2 {
+            let (cfvs, _) = w.root_cfvs(1 - player, &prof, &ranges[player], false, 1);
+            let ours: Vec<f64> = {
+                let t: f64 = ranges[player].iter().sum();
+                ranges[player].iter().map(|x| x / t).collect()
+            };
+            let prior: Vec<f64> = (0..cfvs.len()).map(|_| 1.0 + rng.below(5) as f64).collect();
+            let mut a = Cfr::new_gadget(&w, player, ours.clone(), cfvs.clone(), Some(prior.clone()), Algo::Dcfr);
+            a.iterate(&w, 25);
+            let mut b = Cfr::new_gadget(&dl, player, ours.clone(), cfvs.clone(), Some(prior.clone()), Algo::Dcfr);
+            for _ in 0..50 {
+                b.ext_begin(&dl);
+                b.ext_end(&dl, Vec::new()).unwrap();
+            }
+            assert_eq!(a.t, b.t);
+            let (x, y) = (a.average(&w), b.average(&dl));
+            assert!(x.iter().zip(&y).all(|(p, q)| p.to_bits() == q.to_bits()));
+            assert_eq!(a.gadget_exploitability(&w), b.gadget_exploitability_ext(&dl, &[]));
+        }
+    }
+}
+
+#[test]
+fn gadget_with_fixed_leaf_values_keeps_the_guarantee() {
+    // Fixed (iteration-independent, zero-sum) leaf values make the depth-limited window an ordinary game: re-solving
+    // with the opponent's best-response cfvs against an equilibrium of it keeps them (up to the gadget's gap).
+    let mut rng = Rng::new(12);
+    let s = random_position(&mut rng, 11);
+    let dl = Window::build_cut(&s, 4, Leaves::Frontier, Some(2), 1).unwrap();
+    assert!(!dl.value_leaves.is_empty());
+    let ranges = random_ranges(&dl, &mut rng);
+    let mut vals = vec![0.0; dl.n_leaf_values];
+    for (j, leaf) in dl.value_leaves.iter().enumerate() {
+        let c = ((j * 7) % 11) as f64 / 10.0;
+        vals[leaf.off[0] as usize..][..leaf.n[0] as usize].fill(c);
+        vals[leaf.off[1] as usize..][..leaf.n[1] as usize].fill(1.0 - c);
+    }
+    let mut eq = Cfr::new(&dl, ranges.clone(), Algo::Dcfr);
+    for _ in 0..2000 {
+        eq.ext_begin(&dl);
+        eq.ext_end(&dl, vals.clone()).unwrap();
+    }
+    let star = eq.average(&dl);
+    let norm = |r: &[f64]| -> Vec<f64> {
+        let t: f64 = r.iter().sum();
+        r.iter().map(|x| x / t).collect()
+    };
+    for player in 0..2 {
+        let o = 1 - player;
+        let ours = norm(&ranges[player]);
+        let (cfvs, _) = dl.root_cfvs_ext(o, &star, &ours, false, &vals, 1);
+        let mut g = Cfr::new_gadget(&dl, player, ours.clone(), cfvs.clone(), None, Algo::Dcfr);
+        for _ in 0..2000 {
+            g.ext_begin(&dl);
+            g.ext_end(&dl, vals.clone()).unwrap();
+        }
+        let ge = g.gadget_exploitability_ext(&dl, &vals);
+        assert!(ge.exploitability < 1e-4, "gadget gap {}", ge.exploitability);
+        let (after, _) = dl.root_cfvs_ext(o, &g.average(&dl), &ours, false, &vals, 1);
+        let slack = 2.0 * ge.exploitability * cfvs.len() as f64 + 1e-9;
+        for h in 0..cfvs.len() {
+            assert!(after[h] <= cfvs[h] + slack, "hand {h}: {} > {}", after[h], cfvs[h]);
+        }
+        assert!(ge.max_violation <= slack);
+    }
+}
+
+#[test]
+fn node_cfvs_are_the_subtree_cfvs_at_the_reach_there() {
+    // At the root: the root cfvs. At an internal node n: the cfvs of n's subtree (a window of its own) with the other
+    // player's reach at n, which a window cut at n's depth gives (n is a value leaf there).
+    let mut rng = Rng::new(13);
+    for ply in [11, 12] {
+        let s = random_position(&mut rng, ply);
+        let full = Window::build(&s, 4, Leaves::Frontier, 1).unwrap();
+        let ranges = random_ranges(&full, &mut rng);
+        let prof = hashed_profile(&full, rng.next_u64());
+        for i in 0..2 {
+            let ro = &ranges[1 - i];
+            let (b, f) = full.root_cfvs(i, &prof, ro, true, 1);
+            let (nb, nf, mass) = full.node_cfvs_ext(i, &prof, ro, 0, true, &[], 1);
+            assert_eq!((b, f), (nb, nf));
+            assert!((mass - ro.iter().sum::<f64>()).abs() < 1e-12);
+        }
+        for depth in [1usize, 2] {
+            let cut = Window::build_cut(&s, 4, Leaves::Frontier, Some(depth), 1).unwrap();
+            let mut trunk = cut.uniform_profile();
+            cut.embed(&mut trunk, &full, &prof, 0, 0).unwrap();
+            let reach = cut.leaf_reaches(&trunk, &ranges);
+            for (j, leaf) in cut.value_leaves.iter().enumerate().take(6) {
+                let n = full.find(&cut.leaf_history(j)).unwrap();
+                let sub = Window::build(&full.nodes[n].state, 4, Leaves::Frontier, 1).unwrap();
+                let mut sp = sub.uniform_profile();
+                sub.embed(&mut sp, &full, &prof, 0, n).unwrap();
+                for i in 0..2 {
+                    let o = 1 - i;
+                    let ro_n = &reach[leaf.off[o] as usize..][..leaf.n[o] as usize];
+                    let (b, f) = sub.root_cfvs(i, &sp, ro_n, true, 1);
+                    let (nb, nf, mass) = full.node_cfvs_ext(i, &prof, &ranges[o], n, true, &[], 1);
+                    assert!(b.iter().zip(&nb).all(|(x, y)| (x - y).abs() < 1e-12));
+                    assert!(f.iter().zip(&nf).all(|(x, y)| (x - y).abs() < 1e-12));
+                    assert!((mass - ro_n.iter().sum::<f64>()).abs() < 1e-12);
+                }
+            }
+        }
+    }
+}

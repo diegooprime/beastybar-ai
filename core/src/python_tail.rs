@@ -10,8 +10,9 @@
 //!   likelihoods of the observed actions; `(range, steps)`, steps `[(ply, prob, impossible), ...]`.
 //! - `agent_likelihoods(spec, game, actions, player, samples=8, alpha=0.5, seed=0, threads=0, k=4)`: per-row
 //!   likelihoods of a built-in agent's observed actions, estimated from `samples` runs per row (smoothed by `alpha`).
-//! - `WindowTree(game, actions, k=4, leaves="frontier")`: the public tree of the window below the position reached by
-//!   `actions` from `game`, in `Window`'s layout, for filling strategy tables (rows = (node, hand of the mover)).
+//! - `WindowTree(game, actions, k=4, leaves="frontier", leaf_ply=None)`: the public tree of the window below the
+//!   position reached by `actions` from `game`, in `Window`'s layout (with `leaf_ply`, a depth-limited window's), for
+//!   filling strategy tables (rows = (node, hand of the mover)).
 //!
 //! Long computations release the GIL; agent runs stop on Ctrl-C (KeyboardInterrupt).
 
@@ -284,8 +285,9 @@ fn agent_likelihoods<'py>(
 /// a table filled here is a profile for `Window.exploitability` etc. of the window at the same position), with the
 /// real move history up to its root.
 ///
-/// `WindowTree(game, actions, k=4, leaves="frontier")`: `game` is the start position (the deal), `actions` every
-/// action played up to the window root. Rows of player p: one per (node where p moves, possible hand of p there), in
+/// `WindowTree(game, actions, k=4, leaves="frontier", leaf_ply=None)`: `game` is the start position (the deal),
+/// `actions` every action played up to the window root; `leaf_ply` (> the root's ply) cuts the tree at value leaves
+/// exactly as `Window(..., leaf_ply=L)` does. Rows of player p: one per (node where p moves, possible hand of p there), in
 /// preorder, hands in increasing rank; `encode` gives each row's observation (the real history plus the path inside
 /// the window) and `scatter` maps the rows' action probabilities to strategy entries.
 #[pyclass(name = "WindowTree", module = "bbar._core", skip_from_py_object)]
@@ -305,18 +307,24 @@ impl PyWindowTree {
 #[pymethods]
 impl PyWindowTree {
     #[new]
-    #[pyo3(signature = (game, actions, k=4, leaves="frontier"))]
+    #[pyo3(signature = (game, actions, k=4, leaves="frontier", leaf_ply=None))]
     fn new(
         py: Python<'_>,
         game: PyRef<'_, Game>,
         actions: Vec<i64>,
         k: usize,
         leaves: &str,
+        leaf_ply: Option<usize>,
     ) -> PyResult<Self> {
         let actions = action_list(&actions)?;
         let leaves = parse_leaves(leaves)?;
         let start = game.state;
-        let t = py.detach(|| WindowTree::new(&start, &actions, k, leaves)).map_err(err)?;
+        let cut = match leaf_ply {
+            None => None,
+            Some(l) if l > actions.len() => Some(l - actions.len()),
+            Some(l) => return Err(err(format!("leaf_ply {l} must exceed the root's ply {}", actions.len()))),
+        };
+        let t = py.detach(|| WindowTree::new_cut(&start, &actions, k, leaves, cut)).map_err(err)?;
         Ok(PyWindowTree { t })
     }
 
