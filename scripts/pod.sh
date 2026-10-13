@@ -97,7 +97,8 @@ except Exception: pass' 2>/dev/null || true)
       cd $REMOTE
       pip install -q --break-system-packages maturin numpy pytest 2>&1 | tail -1
       PYTHON=python scripts/build_core.sh
-      python -m bbar.golden --engine core'" ;;
+      python -m bbar.golden --engine core
+      python -c \"import torch; torch.ones(1, device=\\\"cuda\\\"); print(\\\"cuda ok:\\\", torch.cuda.device_count(), \\\"GPUs\\\")\" 2>/dev/null || echo \"WARNING: CUDA unusable on this pod (driver too old or broken host); delete it and pick another\"'" ;;
   ssh)
     id=$1; shift
     if [ $# -eq 0 ]; then
