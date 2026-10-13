@@ -65,7 +65,8 @@ LOG = arena.LOG
 PY_BATCH = 128   # default --batch when a Python agent plays
 # Python agents by spec prefix: module with a class whose factory(body, device) returns a zero-argument callable that
 # makes fresh agents (PyPlayer).
-PY_AGENTS = {"tail:": ("bbar.tail", "TailAgent"), "resolve:": ("bbar.resolve", "ResolveAgent")}
+PY_AGENTS = {"tail:": ("bbar.tail", "TailAgent"), "resolve:": ("bbar.resolve", "ResolveAgent"),
+             "iter949:": ("bbar.iter949", "Iter949Agent")}
 
 
 def sha256_short(data):
@@ -145,13 +146,15 @@ class Decisions:
     deck order freshly randomized); histories: every action played so far (lists of ints); seeds: uint64 [k], a
     private seed per decision (the view and the seed come from a stream derived from the draw); obs, legal: the
     mover's observation (float32 [k, OBS_DIM]) and legal mask (uint8 [k, 36]), or None when no player asked for
-    observations."""
+    observations. envs: the VecEnv index of each decision's game, stable while a batch of games is played (prepare()
+    starts a batch), so an agent may keep per-game memory."""
     games: list
     histories: list
     seeds: np.ndarray
     uniforms: np.ndarray
     obs: object = None
     legal: object = None
+    envs: object = None
 
 
 class PyPlayer:
@@ -208,7 +211,8 @@ class PyPlayer:
         for stream in np.unique(streams):
             sel = np.flatnonzero(streams == stream)
             batch = Decisions([games[j] for j in sel], [hists[j] for j in sel], seeds[sel], uniforms[sel],
-                              None if obs is None else obs[idx[sel]], None if mask is None else mask[idx[sel]])
+                              None if obs is None else obs[idx[sel]], None if mask is None else mask[idx[sel]],
+                              idx[sel])
             got = np.asarray(self.instance(int(stream)).act(batch), dtype=np.int64)
             if got.shape != (len(sel),):
                 raise ValueError(f"{self.name} returned {got.shape} actions for {len(sel)} decisions")

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "play",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "bbar.play", "--no-record", "--seat", "0"],
+      "port": 8765
+    }
+  ]
+}
