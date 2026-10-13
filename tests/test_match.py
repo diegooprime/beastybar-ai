@@ -225,3 +225,24 @@ def test_ctrl_c_interrupts_an_agent_stuck_in_one_long_search():
         if p.poll() is None:
             p.kill()
             p.wait()
+
+
+def test_an_interrupted_match_keeps_its_finished_batches():
+    class StopsLate(match.RustPlayer):
+        calls = 0
+
+        def act(self, *args):
+            StopsLate.calls += 1
+            if StopsLate.calls > 30:   # well into the second batch of 2 deals
+                raise KeyboardInterrupt
+            return super().act(*args)
+
+    raw = match.play(match.make_player("greedy"), StopsLate("random"), 6, seed=5, batch=2)
+    assert raw["stopped_early"]
+    assert raw["deal"] == [0, 0, 1, 1]
+    assert all(len(raw[k]) == 4 for k in ("a_seat", "start", "a_points", "b_points", "moves"))
+    full = match.play(match.make_player("greedy"), match.make_player("random"), 2, seed=5, batch=2)
+    assert raw["a_points"] == full["a_points"] and not full["stopped_early"]
+    with pytest.raises(KeyboardInterrupt):   # nothing finished: nothing to keep
+        StopsLate.calls = 25
+        match.play(match.make_player("greedy"), StopsLate("random"), 6, seed=5, batch=2)

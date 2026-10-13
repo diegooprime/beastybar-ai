@@ -48,6 +48,7 @@ import hashlib
 import io
 import os
 import shlex
+import signal
 import sys
 import time
 from dataclasses import dataclass
@@ -292,10 +293,29 @@ def play(pa, pb, deals, seed, threads=0, batch=1024, progress=False):
 
 
 def _play(pa, pb, deals, seed, threads, batch, progress):
-    t0 = last = time.time()
+    t0 = time.time()
     need_obs = pa.needs_obs or pb.needs_obs
     cols = {k: [] for k in ("deal", "a_seat", "start", "a_points", "b_points")}
     moves = []
+    try:
+        _play_batches(pa, pb, deals, seed, threads, batch, progress, t0, need_obs, cols, moves)
+        stopped = False
+    except KeyboardInterrupt:
+        # Ctrl-C or SIGTERM: keep the finished batches (whole deal pairs only) unless there are none
+        if not cols["deal"]:
+            raise
+        stopped = True
+        n = len(cols["deal"])   # drop anything of an unfinished batch
+        for k in cols:
+            del cols[k][n:]
+        del moves[n:]
+        print(f"  stopped early: {len(cols['deal']) // 2} of {deals} deals played", file=sys.stderr, flush=True)
+    return {"a": pa.name, "b": pb.name, "seconds": time.time() - t0,
+            "threads": threads or os.cpu_count(), "build": build_id(), **cols, "moves": moves, "stopped_early": stopped}
+
+
+def _play_batches(pa, pb, deals, seed, threads, batch, progress, t0, need_obs, cols, moves):
+    last = t0
     for d0 in range(0, deals, batch):
         d = np.arange(d0, min(deals, d0 + batch))
         n = 2 * len(d)
@@ -332,20 +352,18 @@ def _play(pa, pb, deals, seed, threads, batch, progress):
             if newly.any():
                 pts[newly] = env.final_scores()[newly]
             finished |= done
-        cols["deal"] += np.repeat(d, 2).tolist()
-        cols["a_seat"] += a_seat.tolist()
+        moves += [[int(m) for m in row if m >= 0] for row in played]
         cols["start"] += start.tolist()
+        cols["a_seat"] += a_seat.tolist()
         cols["a_points"] += pts[np.arange(n), a_seat].tolist()
         cols["b_points"] += pts[np.arange(n), 1 - a_seat].tolist()
-        moves += [[int(m) for m in row if m >= 0] for row in played]
+        cols["deal"] += np.repeat(d, 2).tolist()   # last: a batch counts once its deals are listed
         if progress and time.time() - last >= 10:
             last = time.time()
             done_deals = d[-1] + 1
             secs = last - t0
             print(f"  {pa.name} vs {pb.name}: {done_deals}/{deals} deals, {secs:.0f}s elapsed, "
                   f"~{secs * (deals - done_deals) / done_deals:.0f}s left", file=sys.stderr, flush=True)
-    return {"a": pa.name, "b": pb.name, "seconds": time.time() - t0,
-            "threads": threads or os.cpu_count(), "build": build_id(), **cols, "moves": moves}
 
 
 def run(a, b, deals, seed=None, device="cpu", threads=0, batch=1024, progress=False):
@@ -386,6 +404,10 @@ def check_trail(log, allow_dirty):
     return revision
 
 
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m bbar.match", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -420,9 +442,13 @@ def main(argv=None):
     if args.batch is None:
         args.batch = PY_BATCH if "py" in kinds else 1024
     command = shlex.join(["python", *sys.orig_argv[1:]] if argv is None else ["python", "-m", "bbar.match", *argv])
+    signal.signal(signal.SIGTERM, _interrupt)   # stop early, keeping the finished batches
     result, raw, players = run(*players, args.deals, args.seed, device, args.threads, args.batch,
                                progress=not args.quiet)
-    arena.append(args.log, record(result, raw, command, revision, players, device))
+    line = record(result, raw, command, revision, players, device)
+    if raw["stopped_early"]:
+        line["stopped_early"] = f"{result.deals} of {args.deals} deals"
+    arena.append(args.log, line)
     games = 2 * result.deals
     print(f"{result}  [{raw['seconds']:.1f}s, {games / max(raw['seconds'], 1e-9):.0f} games/s]", flush=True)
     return result
