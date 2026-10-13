@@ -91,6 +91,10 @@ class Cancellable:
             raise Abandoned
         return self._values(*args, **kwargs)
 
+    def session(self, *args, **kwargs):
+        """The fast path of bbar/value/dl.solve_many: its per-call function, cancellable the same way."""
+        return Cancellable(self._values.session(*args, **kwargs), self._event)
+
     def __getattr__(self, name):
         return getattr(self._values, name)
 
