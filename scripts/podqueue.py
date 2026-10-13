@@ -20,7 +20,11 @@ BUSY = "pgrep -fc 'python -m [b]bar|scripts/[a-z0-9_]*[.]sh' || true"
 
 
 def idle(pod):
-    r = subprocess.run([POD, "ssh", pod, BUSY], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    try:   # a hung ssh (network blips happen) must not stall the queue for every other pod
+        r = subprocess.run([POD, "ssh", pod, BUSY], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                           timeout=30)
+    except subprocess.TimeoutExpired:
+        return False
     return r.stdout.strip() == "0"   # unreachable or unknown counts as busy
 
 
@@ -54,7 +58,13 @@ def main():
                 if pod not in state:
                     state[pod] = idle(pod)
                 if state[pod]:
-                    subprocess.run([POD, "bg", pod, name, cmd], stdin=subprocess.DEVNULL, check=True)
+                    try:
+                        subprocess.run([POD, "bg", pod, name, cmd], stdin=subprocess.DEVNULL, check=True, timeout=60)
+                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                        print(f"{time.strftime('%H:%M:%S')} {pod}: could not start {name} ({e}); retrying later",
+                              flush=True)
+                        state[pod] = False
+                        continue
                     remove(a.queue, line)
                     state[pod] = False
                     print(f"{time.strftime('%H:%M:%S')} {pod}: started {name}", flush=True)
