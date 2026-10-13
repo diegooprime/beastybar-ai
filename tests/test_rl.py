@@ -64,6 +64,48 @@ def test_vecenv_reproducible():
         assert np.array_equal(o1, o2) and np.array_equal(r1, r2)
 
 
+def test_vecenv_into_takes_only_numpy_arrays():
+    """observe_into / privileged_into write where numpy says a real array's memory is: an object with a made-up
+    __array_interface__ (here describing a decoy array, so a regression fails instead of crashing) or an ndarray
+    subclass lying about it never redirects the writes (as bbar._core.WindowBatch; tests/test_value.py)."""
+    n = 3
+    env = VecEnv(n, seed=5)
+    want = env.observe()
+    shapes = [(a.shape, a.dtype) for a in want]
+
+    class Claims:
+        pass
+
+    class Spoof(Claims):
+        __class__ = np.ndarray
+
+    class Liar(np.ndarray):
+        @property
+        def __array_interface__(self):
+            return Liar.decoy.__array_interface__
+
+    for k in range(4):
+        decoy = np.zeros(*shapes[k])
+        Claims.__array_interface__ = decoy.__array_interface__
+        for bad in (Claims(), Spoof(), memoryview(decoy)):
+            outs = [np.zeros(s, d) for s, d in shapes]
+            outs[k] = bad
+            with pytest.raises(ValueError, match="not a numpy array"):
+                env.observe_into(*outs)
+            if k == 0:
+                with pytest.raises(ValueError, match="not a numpy array"):
+                    env.privileged_into(bad)
+        assert not decoy.any()
+    outs = [np.zeros(s, d) for s, d in shapes]
+    Liar.decoy = np.zeros(*shapes[0])
+    outs[0] = outs[0].view(Liar)
+    env.observe_into(*outs)
+    assert not Liar.decoy.any() and all(np.array_equal(np.asarray(a), b) for a, b in zip(outs, want))
+    priv = np.zeros((n, PRIV_DIM), np.float32).view(Liar)
+    env.privileged_into(priv)
+    assert not Liar.decoy.any() and np.array_equal(np.asarray(priv), env.privileged())
+
+
 def test_observation_uses_only_the_movers_information():
     p0_hand, p0_deck = ANIMALS[:4], ANIMALS[4:]
     # Player 0 to move at ply 0: player 1's hand and both deck orders are hidden from them.

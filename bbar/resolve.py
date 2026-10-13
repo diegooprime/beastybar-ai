@@ -173,6 +173,10 @@ class ValueModel:
     def __call__(self, pub, movers, beliefs):
         return self.fn(pub, movers, beliefs)
 
+    def session(self, pub, slots):
+        """NetValues.session: the fast path of bbar/value/dl.solve_many (same values)."""
+        return self.fn.session(pub, slots)
+
 
 def exact_values():
     """V=exact: the exact value function (cold solves: the agent's play does not depend on what it solved before)."""

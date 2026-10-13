@@ -12,8 +12,10 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use pyo3::exceptions::{PyKeyboardInterrupt, PyValueError};
+use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyByteArray, PyBytes, PyDict};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyByteArray, PyBytes, PyDict, PyType};
 
 use crate::action::NUM_ACTIONS;
 use crate::agents::Spec;
@@ -45,24 +47,62 @@ pub(crate) unsafe fn slice_mut<'a, T>(buf: &'a Bound<'_, PyByteArray>) -> PyResu
     Ok(body)
 }
 
+/// Where a numpy array's elements are, as numpy reports it (`__array_interface__`).
+pub(crate) struct ArrayInfo {
+    /// Address of the first element.
+    pub addr: usize,
+    pub readonly: bool,
+    /// numpy's type string, e.g. "<f4".
+    pub typestr: String,
+    /// Number of elements.
+    pub len: usize,
+    pub c_contiguous: bool,
+}
+
+/// [`ArrayInfo`] of `arr`, which must be a real numpy array (`numpy.ndarray` or a subclass); anything else is a
+/// ValueError naming `what`. The interface is read through `numpy.ndarray`'s own `__array_interface__` descriptor,
+/// never `arr`'s attribute, so neither an object that only has such an attribute (or claims `__class__`) nor a
+/// subclass overriding it can point Rust at memory that is not the array's: the address is that of memory the array
+/// owns or references through its base, valid while the caller holds `arr` (numpy refuses to resize an array that
+/// other references see).
+pub(crate) fn array_info(arr: &Bound<'_, PyAny>, what: &str) -> PyResult<ArrayInfo> {
+    static NDARRAY: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+    let py = arr.py();
+    let err = |m: String| PyValueError::new_err(format!("{what}: {m}"));
+    let nd = NDARRAY.import(py, "numpy", "ndarray")?;
+    if !arr.get_type().is_subclass(nd)? {
+        return Err(err(format!("not a numpy array ({})", arr.get_type().name()?)));
+    }
+    let ai = nd
+        .getattr(intern!(py, "__array_interface__"))?
+        .call_method1(intern!(py, "__get__"), (arr,))
+        .map_err(|e| err(format!("not a numpy array ({e})")))?;
+    let ai = ai.cast::<PyDict>()?;
+    let get = |k: &str| ai.get_item(k)?.ok_or_else(|| err(format!("no {k} in __array_interface__")));
+    let (addr, readonly): (usize, bool) = get("data")?.extract()?;
+    let shape: Vec<usize> = get("shape")?.extract()?;
+    Ok(ArrayInfo {
+        addr,
+        readonly,
+        typestr: get("typestr")?.extract()?,
+        len: shape.iter().product(),
+        // numpy gives strides None exactly for C-contiguous arrays.
+        c_contiguous: ai.get_item("strides")?.is_none_or(|s| s.is_none()),
+    })
+}
+
 /// The data of `arr`, a writable C-contiguous numpy array of `len` elements of numpy type `typestr` (e.g. "<f4"),
-/// read from its `__array_interface__`. Returns (address, byte length).
+/// from [`array_info`]. Returns (address, byte length).
 fn array_data(arr: &Bound<'_, PyAny>, typestr: &str, len: usize, align: usize) -> PyResult<(usize, usize)> {
     let err = |what: &str| PyValueError::new_err(format!("output array: {what}"));
-    let ai = arr.getattr("__array_interface__").map_err(|_| err("not a numpy array"))?;
-    let ai = ai.cast::<PyDict>()?;
-    let get = |k: &str| ai.get_item(k)?.ok_or_else(|| err(&format!("no {k} in __array_interface__")));
-    let (addr, readonly): (usize, bool) = get("data")?.extract()?;
-    let ts: String = get("typestr")?.extract()?;
-    let shape: Vec<usize> = get("shape")?.extract()?;
-    let contiguous = ai.get_item("strides")?.is_none_or(|s| s.is_none());
-    if ts != typestr {
-        return Err(err(&format!("dtype {ts}, expected {typestr}")));
+    let a = array_info(arr, "output array")?;
+    if a.typestr != typestr {
+        return Err(err(&format!("dtype {}, expected {typestr}", a.typestr)));
     }
-    if readonly || !contiguous || shape.iter().product::<usize>() != len || addr % align != 0 {
+    if a.readonly || !a.c_contiguous || a.len != len || a.addr % align != 0 {
         return Err(err(&format!("need a writable C-contiguous array of {len} elements")));
     }
-    Ok((addr, len * typestr[2..].parse::<usize>().unwrap()))
+    Ok((a.addr, len * typestr[2..].parse::<usize>().unwrap()))
 }
 
 /// `spans` (address, byte length) unchanged if no two overlap (so mutable slices over them do not alias).

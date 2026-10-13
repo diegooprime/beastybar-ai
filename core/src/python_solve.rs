@@ -14,6 +14,8 @@
 //!   depth-limited windows (`leaf_ply`) whose value leaves are valued from Python every half-iteration
 //!   (`solve_external`, `resolve_external` with the gadget, `ext_begin` / `ext_end`), counterfactual values at
 //!   internal nodes (`node_values`), and profile assembly (`compose`, `embed`).
+//! - `WindowBatch` (`python_batch.rs`): the half-iterations of many depth-limited windows in one call each, on
+//!   several threads with the GIL released, through one caller-owned leaf array (`bbar/value/dl.solve_many`).
 //!
 //! The perfect-information functions share one transposition table (2^18 buckets, 8 MiB); everything releases the
 //! GIL while computing.
@@ -144,6 +146,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hand_rank, m)?)?;
     m.add_function(wrap_pyfunction!(hand_unrank, m)?)?;
     m.add_class::<PyWindow>()?;
+    m.add_class::<crate::python_batch::PyWindowBatch>()?;
     Ok(())
 }
 
@@ -190,16 +193,16 @@ fn to_numpy<'py>(py: Python<'py>, data: &[f64], shape: &[usize]) -> PyResult<Bou
 /// an array (rows normalised over the legal actions; rows without positive mass become uniform).
 #[pyclass(name = "Window", module = "bbar._core", skip_from_py_object)]
 pub struct PyWindow {
-    w: Window,
+    pub(crate) w: Window,
     /// Root ranges, local layout, normalised.
     ranges: [Vec<f64>; 2],
-    cfr: Option<Cfr>,
+    pub(crate) cfr: Option<Cfr>,
     threads: usize,
     /// Ply of the root and of the value leaves (if any).
     ply: usize,
     leaf_ply: Option<usize>,
-    /// `cfr` was started by `ext_start` (ext_begin / ext_end may drive it).
-    external: bool,
+    /// `cfr` was started by `ext_start` (ext_begin / ext_end may drive it; so may `WindowBatch`, python_batch.rs).
+    pub(crate) external: bool,
 }
 
 impl PyWindow {
@@ -408,6 +411,9 @@ impl PyWindow {
             let values = f.call1((player, t, b, m))?;
             cb += t1.elapsed().as_secs_f64();
             self.ext_end(py, values)?;
+        }
+        if let Some(c) = self.cfr.as_mut() {
+            c.ext_release();
         }
         let d = PyDict::new(py);
         d.set_item("iterations", self.cfr.as_ref().map_or(0, |c| c.t))?;

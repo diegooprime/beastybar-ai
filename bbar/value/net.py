@@ -191,10 +191,32 @@ class NetValues:
 
     `chunk`: evaluate in forward passes of exactly `chunk` rows (the last one padded): every row's values are then the
     same whatever else is in the call (float matmuls can round differently for different batch shapes: one row alone
-    takes another kernel), so a player batching many solves' leaves plays as it would solving them one at a time."""
+    takes another kernel), so a player batching many solves' leaves plays as it would solving them one at a time.
+
+    Two ways in, same numbers: __call__ (absolute players, float64 arrays over the 495 slots: any caller) and
+    session() (the fast path of dl.solve_many: the leaves' public features and hand slots go to the device once, then
+    each call moves only float32 beliefs and values of the feasible hands, mover first, as bbar._core.WindowBatch
+    writes and reads them). Both build the same network input (float32 beliefs at the same slots, 0 elsewhere) and
+    run the same forward passes, so the values are bit-identical (tests/test_value.py)."""
 
     def __init__(self, net, device="cpu", batch=4096, chunk=None):
         self.net, self.device, self.batch, self.chunk = net, torch.device(device), batch, chunk
+
+    def _forward(self, p, rel):
+        """Values float32 [n, 2, 495] (mover-relative, clamped) of public features p float32 [n, >= pub_dim] and
+        mover-relative beliefs rel float32 [n, 2, 495], both on the device: forward passes of `chunk` (padded) or
+        at most `batch` rows."""
+        n = len(p)
+        out = torch.empty((n, 2, SLOTS), device=p.device)
+        step = self.chunk or self.batch
+        for i in range(0, n, step):
+            pc, rc = p[i:i + step], rel[i:i + step]
+            k = len(pc)
+            if self.chunk and k < step:
+                pc = torch.cat([pc, pc.new_zeros((step - k, pc.shape[1]))])
+                rc = torch.cat([rc, rc.new_full((step - k, 2, SLOTS), 1 / SLOTS)])
+            out[i:i + k] = self.net(pc, rc)[:k].clamp(0, 1)
+        return out
 
     @torch.no_grad()
     def __call__(self, pub, movers, beliefs):
@@ -208,14 +230,36 @@ class NetValues:
         # float32 on the host (MPS has no float64), then mover-relative on the device.
         b = torch.as_tensor(np.asarray(beliefs), dtype=torch.float32).to(dev)
         p = torch.as_tensor(np.asarray(pub), dtype=torch.float32).to(dev)
-        rel = torch.where(flip, b.flip(1), b)
-        out = torch.empty((n, 2, SLOTS), device=dev)
-        step = self.chunk or self.batch
-        for i in range(0, n, step):
-            pc, rc = p[i:i + step], rel[i:i + step]
-            k = len(pc)
-            if self.chunk and k < step:
-                pc = torch.cat([pc, pc.new_zeros((step - k, pc.shape[1]))])
-                rc = torch.cat([rc, rc.new_full((step - k, 2, SLOTS), 1 / SLOTS)])
-            out[i:i + k] = self.net(pc, rc)[:k].clamp(0, 1)
+        out = self._forward(p, torch.where(flip, b.flip(1), b))
         return torch.where(flip, out.flip(1), out).cpu().double().numpy()
+
+    @torch.no_grad()
+    def session(self, pub, slots):
+        """A value function for many calls on the same n leaves (bbar/value/dl.solve_many): pub float32 [n, PUB_DIM],
+        slots int [n, 2, W] (bbar._core.WindowBatch.slots(): the hand slot of each entry, mover first; padding at a
+        slot with no belief). Returns f(beliefs float32 [n, 2, W]) -> values float32 [n, 2, W] in the same layout,
+        equal to __call__'s at those slots.
+
+        Each call still costs more than the forward passes: the beliefs to the device, a zeroed [n, 2, 495] input
+        and the scatter into it, the gather of the values and their copy back. With a do-nothing network on MPS (M4,
+        9132 leaves: 128 cascade solves at plies 8-9) that is 5.5 ms per call alone and 15-18 ms with 4 such
+        processes at once, more than the solver's half-iteration (bbar/value/dl.py). Measure it on the device that
+        will run (python -m bbar.value.cascade labels --stub-net) before counting on a FLOP-bound estimate."""
+        return _Session(self, pub, slots)
+
+
+class _Session:
+    def __init__(self, nv, pub, slots):
+        dev = nv.device
+        self.nv, self.n = nv, len(pub)
+        self.p = torch.as_tensor(np.asarray(pub), dtype=torch.float32).to(dev)
+        self.idx = torch.as_tensor(np.asarray(slots), dtype=torch.int64).to(dev)
+        if self.idx.shape[:2] != (self.n, 2):
+            raise ValueError(f"slots {tuple(self.idx.shape)} for {self.n} leaves")
+
+    @torch.no_grad()
+    def __call__(self, beliefs):
+        dev = self.nv.device
+        b = torch.as_tensor(beliefs, dtype=torch.float32).to(dev)
+        rel = torch.zeros((self.n, 2, SLOTS), device=dev).scatter_(2, self.idx, b)
+        return self.nv._forward(self.p, rel).gather(2, self.idx).cpu().numpy()

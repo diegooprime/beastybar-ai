@@ -26,6 +26,8 @@ pub mod window;
 #[cfg(feature = "pyo3")]
 mod python;
 #[cfg(feature = "pyo3")]
+mod python_batch;
+#[cfg(feature = "pyo3")]
 mod python_env;
 #[cfg(feature = "pyo3")]
 mod python_solve;

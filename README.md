@@ -81,7 +81,8 @@ games go to `runs/play/games.jsonl`.
 - **Value network pipeline** (`bbar/value/`): exact labels from window solves (`gen.py`, synthetic and Bayes ranges),
   labels at the beliefs depth-limited solves query (`harvest.py`), trainer (`--arch mlp|hand|opt`), E2 evaluator, and
   the cascade (`cascade.py`, `scripts/cascade.sh`): labels at earlier plies from depth-limited solves with the current
-  net, retrain, repeat down to ply 0. PBS v2 inputs add option features (`core/src/options.rs`: for every unplayed
+  net, retrain, repeat down to ply 0. Many depth-limited solves run in lockstep (`bbar/value/dl.solve_many`): one
+  multithreaded Rust call (`bbar._core.WindowBatch`) and one network call per half-iteration. PBS v2 inputs add option features (`core/src/options.rs`: for every unplayed
   animal of either player, what playing it now would do, best and worst parameter); `--arch opt` builds each hand's
   value from its animals' features. Version-1 networks still load and run everywhere.
 - **Re-solving player** (`bbar/resolve.py`, spec `resolve:V=PATH,base=nn:PATH,P0=8,F=10,d=2,iters=200,mode=safe|plain`):

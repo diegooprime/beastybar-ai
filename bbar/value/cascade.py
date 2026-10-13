@@ -2,7 +2,7 @@
 and the driver that trains one network on all plies, level by level down to ply 0.
 
     python -m bbar.value.cascade labels --net V.pt --out data/value/NAME --plies 8,9 [--d 2] [--max-leaf-ply 10]
-        [--iters 200] [--labels N | --minutes M] [--workers W] [--jobs B] [--threads T] [--device cuda]
+        [--iters 200] [--labels N | --minutes M] [--workers W] [--jobs B] [--threads T] [--device cuda] [--stub-net]
         [bbar.value.gen's position and range flags: --mix --blueprint --bayes --bayes-model --ranges-per-state ...]
     python -m bbar.value.cascade run --name NAME --data data/value/v1 [--net checkpoints/value/v1/best.pt]
         --levels 8,9:200000 6,7:200000 4,5:200000 2,3:200000 0,1:200000 [--d 2] [--iters 200] [--device cuda]
@@ -40,9 +40,18 @@ Shards: gen.py's format (same arrays, `meta` kind "cascade-labels" with the netw
 all_hands_exact false), so bbar.value.train trains one network on exact and cascade labels together.
 
 Throughput. Each worker process runs --jobs solves in lockstep (bbar/value/dl.solve_many): every half-iteration one
-batched network call over all value leaves of all its jobs (on --device), the solver work on --threads threads. The
-summary reports labels/s per worker and the split between solver and network time; --device cpu vs cuda on the same
-flags gives the GPU's gain.
+batched network call over all value leaves of all its jobs (on --device; with --device cuda worker k uses GPU k mod
+the GPU count), the solver work in one Rust call on --threads threads (GIL released). The summary reports labels/s
+per worker, the network's share of the time and the cost of a half-iteration of a batch: value function (the
+network's forward passes plus NetValues.session's copies, scatter and gather) and solver; --device cpu vs cuda on the
+same flags gives the GPU's gain, --stub-net (a do-nothing network: no shards) the value function's cost without the
+forward passes. Measured on an M4 (128 jobs at plies 8-9, 9132 value leaves at ply 10, 150 iterations, 4 workers x 5
+threads at once), the same setup before and after WindowBatch: NetValues with a do-nothing network on MPS, 91-129 ->
+19-23 ms per half-iteration per worker (3.3-4.6 -> 18-22 labels/s per worker; 15-18 ms of the 19-23 is the session
+call, 3-7 ms the solver); constant values instead (the solver alone) 3.6 ms, 107 labels/s per worker. Before, the
+per-window loop was GIL-bound (the 1-2 labels/s per worker with idle GPUs seen on a 2xA40 pod). The forward passes
+come on top: 2 x parameters FLOP per value leaf per half-iteration (1024x6 MLP, v3m: ~280 GFLOP per half-iteration
+of these 128 jobs); scripts/cascade.sh has the pod estimate.
 
 Driver (run): trains V0 on --data (exact labels, plies >= 10) unless --net is given; then for each level, generates
 its labels with the current network into data/value/NAME-pA-B, retrains on everything so far (checkpoints/value/
@@ -113,6 +122,25 @@ def make_values(net, device, chunk=None):
     return NetValues(m, torch.device(device), chunk=chunk)
 
 
+def stub_values(device):
+    """--stub-net: NetValues over a network that returns the beliefs it is given (NetValues clamps them to [0, 1]):
+    everything the value function costs but the forward passes (NetValues.session: beliefs to the device, the
+    scatter into (n, 2, 495), the gather, values back)."""
+    from bbar.value.net import NetValues
+    import torch
+
+    class Stub(torch.nn.Module):
+        def forward(self, pub, ranges):
+            return ranges
+    return NetValues(Stub().to(device), torch.device(device))
+
+
+def worker_device(device, wid, gpus):
+    """Worker `wid`'s network device: --device cuda spreads the workers over the machine's `gpus` GPUs (cuda:wid %
+    gpus); any other device (cpu, mps, cuda:K) is every worker's."""
+    return f"cuda:{wid % gpus}" if device == "cuda" and gpus > 1 else device
+
+
 def worker(args):
     wid, cfg, meta = args
     import torch
@@ -125,14 +153,15 @@ def worker(args):
     if cfg["bayes"] > 0:
         from bbar.policy import NetModel
         model = NetModel(cfg["bayes_model"], "cpu")
-    values = make_values(cfg["net"], cfg["device"])
+    device = worker_device(cfg["device"], wid, torch.cuda.device_count() if cfg["device"] == "cuda" else 0)
+    values = stub_values(device) if cfg["stub_net"] else make_values(cfg["net"], device)
     plies = cfg["plies"]
     wmax = max(cfg["ply_weights"])
     keep = {p: w / wmax for p, w in zip(plies, cfg["ply_weights"])}
     quota = worker_quota(cfg["labels"], cfg["workers"], wid)
     deadline = time.time() + 60 * cfg["minutes"] if cfg["minutes"] else float("inf")
     stats = {p: {"labels": 0, "states": 0, "seconds": 0.0, "iterations": 0, "net_seconds": 0.0,
-                 "solve_seconds": 0.0} for p in plies}
+                 "solve_seconds": 0.0, "half_iterations": 0.0} for p in plies}
     rows, shard, done, pending = [], 0, 0, []
     wmeta = dict(meta, worker=wid, worker_seed=[cfg["seed"], wid])
     out = Path(cfg["out"])
@@ -157,7 +186,9 @@ def worker(args):
             s["seconds"] += st["total_seconds"] / n
             s["net_seconds"] += st["callback_seconds"] / n
             s["solve_seconds"] += (st["seconds"] - st["callback_seconds"]) / n
-        rows += labels
+            s["half_iterations"] += 2 * cfg["iters"] / n     # (of a batch: per-half-iteration costs below)
+        if not cfg["stub_net"]:                             # (stub values: nothing to keep)
+            rows += labels
         done += n
         if len(rows) >= cfg["shard_size"]:
             flush()
@@ -193,7 +224,11 @@ def labels_main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m bbar.value.cascade labels", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     gen.add_sampling_args(ap, plies="8,9", ply_weights="1,1")
-    ap.add_argument("--net", required=True, help="value network checkpoint valuing the leaves")
+    ap.add_argument("--net", default="", help="value network checkpoint valuing the leaves")
+    ap.add_argument("--stub-net", action="store_true",
+                    help="throughput check instead of labels: the leaves are valued by a do-nothing network on "
+                         "--device through the same path (NetValues.session: copies, scatter, gather) and no shard "
+                         "is written, only the summary: the cost of a half-iteration without the forward passes")
     ap.add_argument("--d", type=int, default=2, help="value leaves at ply min(S + d, --max-leaf-ply)")
     ap.add_argument("--max-leaf-ply", type=int, default=10)
     ap.add_argument("--iters", type=int, default=200, help="CFR-D iterations per label")
@@ -203,32 +238,40 @@ def labels_main(argv=None):
     ap.add_argument("--torch-threads", type=int, default=1, help="torch CPU threads per worker")
     ap.add_argument("--device", default="cpu", help="network device in the workers: cpu, cuda, mps")
     a = ap.parse_args(argv)
-    if not Path(a.net).is_file():
-        ap.error(f"no network {a.net}")
+    if not a.stub_net and not Path(a.net).is_file():
+        ap.error(f"no network {a.net!r} (--net, or --stub-net to time the rest)")
     if a.d < 1 or a.iters < 1 or a.jobs < 1:
         ap.error("--d, --iters and --jobs must be at least 1")
     cfg, meta, summary_path = gen.setup_run(
         ap, a, "cascade-labels", "bbar.value.cascade", None if argv is None else ["labels", *argv], min_ply=0,
         max_ply=a.max_leaf_ply - 1,
         plies_error=f"--plies must be in 0..{a.max_leaf_ply - 1} (below --max-leaf-ply)")
-    cfg.update(net=a.net, d=a.d, max_leaf_ply=a.max_leaf_ply, iters=a.iters, jobs=a.jobs, threads=a.threads,
-               torch_threads=a.torch_threads, device=a.device, labels=a.labels)
-    meta.update(net_sha256=gen._sha(a.net), leaf_plies={p: leaf_ply(p, a.d, a.max_leaf_ply) for p in cfg["plies"]},
-                all_hands_exact=False)
+    cfg.update(net="" if a.stub_net else a.net, stub_net=a.stub_net, d=a.d, max_leaf_ply=a.max_leaf_ply,
+               iters=a.iters, jobs=a.jobs, threads=a.threads, torch_threads=a.torch_threads, device=a.device,
+               labels=a.labels)
+    meta.update(net_sha256=None if a.stub_net else gen._sha(a.net), stub_net=a.stub_net,
+                leaf_plies={p: leaf_ply(p, a.d, a.max_leaf_ply) for p in cfg["plies"]}, all_hands_exact=False)
     plies, workers, out = cfg["plies"], cfg["workers"], cfg["out"]
     print(f"cascade: {a.labels} labels at plies {plies} (value leaves at {meta['leaf_plies']}), {a.iters} CFR-D "
-          f"iterations, {workers} workers x {a.jobs} solves in lockstep, network on {a.device} -> {out}", flush=True)
+          f"iterations, {workers} workers x {a.jobs} solves in lockstep, "
+          f"{'do-nothing network (--stub-net: no shards)' if a.stub_net else 'network'} on {a.device} -> {out}",
+          flush=True)
     total, wall = gen.run_workers(worker, cfg, meta)
     rows = []
     for p in plies:
-        st = dict(dict(labels=0, states=0, seconds=0.0, iterations=0, net_seconds=0.0, solve_seconds=0.0), **total[p])
+        st = dict(dict(labels=0, states=0, seconds=0.0, iterations=0, net_seconds=0.0, solve_seconds=0.0,
+                       half_iterations=0.0), **total[p])
         rate = st["labels"] / st["seconds"] if st["seconds"] else float("nan")
+        halves = st["half_iterations"]
         rows.append(dict(ply=p, leaf_ply=leaf_ply(p, a.d, a.max_leaf_ply), labels=st["labels"], states=st["states"],
                          worker_seconds=st["seconds"], labels_per_sec_per_worker=rate,
-                         net_share=st["net_seconds"] / st["seconds"] if st["seconds"] else float("nan")))
+                         net_share=st["net_seconds"] / st["seconds"] if st["seconds"] else float("nan"),
+                         net_ms_per_half_iteration=1e3 * st["net_seconds"] / halves if halves else float("nan"),
+                         solver_ms_per_half_iteration=1e3 * st["solve_seconds"] / halves if halves else float("nan")))
         print(f"  ply {p} (leaves at {rows[-1]['leaf_ply']}): {st['labels']} labels, {rate:.2f} labels/s per worker "
               f"({a.device}, {a.jobs} jobs, {a.threads} threads), network {100 * rows[-1]['net_share']:.0f}% of "
-              f"the time", flush=True)
+              f"the time; per half-iteration of a batch: value function {rows[-1]['net_ms_per_half_iteration']:.1f} "
+              f"ms, solver {rows[-1]['solver_ms_per_half_iteration']:.1f} ms", flush=True)
     n = sum(r["labels"] for r in rows)
     print(f"{n} labels in {wall:.1f}s ({n / wall:.2f}/s with {workers} workers)", flush=True)
     summary = dict(meta, wall_seconds=wall, labels=n, labels_per_sec=n / wall, by_ply=rows)

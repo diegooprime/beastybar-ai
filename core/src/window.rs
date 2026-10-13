@@ -65,6 +65,11 @@
 //! and masses; the caller evaluates the value function at those beliefs; `ext_end` takes the values of both players
 //! and updates the regrets and the average strategy of the player whose half-iteration it is.
 //!
+//! `ext_begin` keeps the current strategy, the raw leaf reaches and the last query between half-iterations and
+//! updates only the entries of the player whose half-iteration just ended (the only regrets that changed; with the
+//! gadget, the only root reach that changed), and `ext_end`'s walk reuses that strategy: the same numbers as computing
+//! everything afresh ([`Cfr::ext_fresh`]; `tests/window_dl.rs`), for about half the work.
+//!
 //! **Which policy defines the leaf beliefs: the current iterate.** This is CFR-D (Burch et al. 2014) and DeepStack's
 //! depth-limited lookahead: on every iteration the leaf PBS is the one the iterate induces, and the leaf values are
 //! the (approximate) subgame-equilibrium values for it. With an exact oracle, each iterate is then a full-game
@@ -536,13 +541,28 @@ fn update_regret(algo: Algo, reg: &mut [f64], pred: &mut [f64], x: usize, r: f64
 /// Regret matching over the legal actions of each hand: `x+ / sum(x+)`, uniform when no entry is positive.
 #[inline]
 fn regret_match(x: &[f64], extra: Option<&[f64]>, masks: &[u16], animals: &[u8], sig: &mut [f64]) {
+    match extra {
+        None => regret_match_rows(x, x, 0.0, masks, animals, sig),
+        Some(p) => regret_match_rows(x, p, 1.0, masks, animals, sig),
+    }
+}
+
+/// [`regret_match`] on `x + k * p` (k = 0: `x + 0.0`, as `extra = None` always computed it). Each row's legal
+/// actions are found once; the arithmetic is unchanged.
+#[inline]
+fn regret_match_rows(x: &[f64], p: &[f64], k: f64, masks: &[u16], animals: &[u8], sig: &mut [f64]) {
     let ne = animals.len();
+    debug_assert!(ne <= 64);
+    let (x, p, sig) = (&x[..masks.len() * ne], &p[..masks.len() * ne], &mut sig[..masks.len() * ne]);
     for (h, &hm) in masks.iter().enumerate() {
         let row = h * ne;
+        let (xr, pr, sr) = (&x[row..row + ne], &p[row..row + ne], &mut sig[row..row + ne]);
         let (mut s, mut nl) = (0.0, 0usize);
+        let mut legal = 0u64;
         for e in 0..ne {
             if hm >> animals[e] & 1 != 0 {
-                let v = x[row + e] + extra.map_or(0.0, |p| p[row + e]);
+                legal |= 1 << e;
+                let v = xr[e] + if k == 0.0 { 0.0 } else { pr[e] };
                 if v > 0.0 {
                     s += v;
                 }
@@ -550,10 +570,10 @@ fn regret_match(x: &[f64], extra: Option<&[f64]>, masks: &[u16], animals: &[u8],
             }
         }
         for e in 0..ne {
-            sig[row + e] = if hm >> animals[e] & 1 == 0 {
+            sr[e] = if legal >> e & 1 == 0 {
                 0.0
             } else if s > 0.0 {
-                let v = x[row + e] + extra.map_or(0.0, |p| p[row + e]);
+                let v = xr[e] + if k == 0.0 { 0.0 } else { pr[e] };
                 if v > 0.0 { v / s } else { 0.0 }
             } else {
                 1.0 / nl as f64
@@ -999,34 +1019,46 @@ impl Window {
     /// normalised): the root range times the player's own action probabilities and draws (leaf-values layout).
     pub fn leaf_reaches(&self, profile: &[f64], ranges: &[Vec<f64>; 2]) -> Vec<f64> {
         let mut out = vec![0.0; self.n_leaf_values];
-        if let Child::Node(r) = self.root {
-            self.reach_rec(profile, r as usize, [&ranges[0], &ranges[1]], &mut out);
+        for (p, root) in ranges.iter().enumerate() {
+            self.leaf_reaches_of(profile, p, root, &mut out);
         }
         out
     }
 
-    fn reach_rec(&self, prof: &[f64], n: usize, r: [&[f64]; 2], out: &mut [f64]) {
+    /// Player `p`'s part of [`Window::leaf_reaches`] (its root reach `root`), written into `out` (a leaf-values
+    /// buffer; the other player's entries are left alone).
+    pub fn leaf_reaches_of(&self, profile: &[f64], p: usize, root: &[f64], out: &mut [f64]) {
+        if let Child::Node(r) = self.root {
+            self.reach_rec(profile, r as usize, p, root, out);
+        }
+    }
+
+    fn reach_rec(&self, prof: &[f64], n: usize, p: usize, r: &[f64], out: &mut [f64]) {
         let node = &self.nodes[n];
-        let p = node.mover as usize;
+        let moves = node.mover as usize == p;
         let ne = node.n_edges as usize;
         for (e, edge) in self.node_edges(n).iter().enumerate() {
-            if matches!(edge.child, Child::Terminal(_) | Child::Frontier(_)) {
-                continue;
-            }
             let tr = &self.trans[edge.trans as usize];
-            let mut rp = vec![0.0; tr.to_n];
-            tr.push(|h| r[p][h] * prof[node.entry + h * ne + e], &mut rp);
-            let mut cr = r;
-            cr[p] = &rp;
             match edge.child {
-                Child::Node(c) => self.reach_rec(prof, c as usize, cr, out),
+                Child::Terminal(_) | Child::Frontier(_) => {}
+                Child::Node(c) if moves => {
+                    let mut rp = vec![0.0; tr.to_n];
+                    tr.push(|h| r[h] * prof[node.entry + h * ne + e], &mut rp);
+                    self.reach_rec(prof, c as usize, p, &rp, out);
+                }
+                Child::Node(c) => self.reach_rec(prof, c as usize, p, r, out),
                 Child::Value(j) => {
+                    // The mover's reach pushed in place (into zeros, as into a fresh vector), the other's copied.
                     let leaf = &self.value_leaves[j as usize];
-                    for q in 0..2 {
-                        out[leaf.off[q] as usize..][..leaf.n[q] as usize].copy_from_slice(cr[q]);
+                    let dst = &mut out[leaf.off[p] as usize..][..leaf.n[p] as usize];
+                    if moves {
+                        debug_assert_eq!(dst.len(), tr.to_n);
+                        dst.fill(0.0);
+                        tr.push(|h| r[h] * prof[node.entry + h * ne + e], dst);
+                    } else {
+                        dst.copy_from_slice(r);
                     }
                 }
-                _ => unreachable!(),
             }
         }
     }
@@ -1310,6 +1342,9 @@ struct CfrCtx<'a> {
     /// Value-leaf values (empty without value leaves).
     ext: &'a [f64],
     par_min: u32,
+    /// The current strategy profile if already computed (`Cfr::ext_begin` computes it for the leaf reaches; the
+    /// regrets have not changed since): the same numbers the walk would compute node by node.
+    cur: Option<&'a [f64]>,
 }
 
 impl CfrCtx<'_> {
@@ -1331,8 +1366,14 @@ impl CfrCtx<'_> {
         let (animals, _) = w.animals(n);
         let animals = &animals[..ne];
         let e0 = node.entry - m.base;
-        let (sig, scratch) = scratch.split_at_mut(nh * ne);
-        self.strategy(&m.reg[e0..e0 + nh * ne], &m.pred[e0..e0 + nh * ne], masks, animals, sig);
+        let (sig_buf, scratch) = scratch.split_at_mut(nh * ne);
+        let sig: &[f64] = match self.cur {
+            Some(cur) => &cur[node.entry..node.entry + nh * ne],
+            None => {
+                self.strategy(&m.reg[e0..e0 + nh * ne], &m.pred[e0..e0 + nh * ne], masks, animals, sig_buf);
+                sig_buf
+            }
+        };
         let parallel = node.end - n as u32 >= self.par_min;
         if p == self.i {
             let (q, rest) = scratch.split_at_mut(nh * ne);
@@ -1587,6 +1628,9 @@ pub struct Cfr {
     pub gadget: Option<Gadget>,
     /// Depth-limited solving state (windows with value leaves).
     pub ext: Option<ExtState>,
+    /// Every `ext_begin` recomputes the current strategy, leaf reaches and beliefs of both players from scratch
+    /// instead of updating its caches (the reference for them; tests).
+    pub ext_fresh: bool,
 }
 
 /// What the caller of a depth-limited half-iteration evaluates: per value leaf, both players' beliefs (normalised
@@ -1601,21 +1645,30 @@ pub struct LeafQuery {
 impl LeafQuery {
     /// Beliefs and masses from raw reaches (leaf-values layout).
     pub fn from_reaches(w: &Window, reach: &[f64]) -> LeafQuery {
-        let mut q = LeafQuery { beliefs: reach.to_vec(), mass: Vec::with_capacity(w.value_leaves.len()) };
-        for leaf in &w.value_leaves {
-            let m = [0, 1].map(|p| {
-                let b = &mut q.beliefs[leaf.off[p] as usize..][..leaf.n[p] as usize];
-                let mass: f64 = b.iter().sum();
-                if mass > 0.0 {
-                    b.iter_mut().for_each(|x| *x /= mass);
-                } else {
-                    b.fill(1.0 / b.len() as f64);
-                }
-                mass
-            });
-            q.mass.push(m);
+        LeafQuery::from_reach_vec(w, reach.to_vec())
+    }
+
+    /// [`LeafQuery::from_reaches`], normalising `reach` in place.
+    pub fn from_reach_vec(w: &Window, reach: Vec<f64>) -> LeafQuery {
+        let mut q = LeafQuery { beliefs: reach, mass: vec![[0.0; 2]; w.value_leaves.len()] };
+        for p in 0..2 {
+            q.normalize(w, p);
         }
         q
+    }
+
+    /// Player `p`'s beliefs and masses from its raw reaches (in `beliefs`, leaf-values layout), in place.
+    fn normalize(&mut self, w: &Window, p: usize) {
+        for (leaf, m) in w.value_leaves.iter().zip(&mut self.mass) {
+            let b = &mut self.beliefs[leaf.off[p] as usize..][..leaf.n[p] as usize];
+            let mass: f64 = b.iter().sum();
+            if mass > 0.0 {
+                b.iter_mut().for_each(|x| *x /= mass);
+            } else {
+                b.fill(1.0 / b.len() as f64);
+            }
+            m[p] = mass;
+        }
     }
 }
 
@@ -1634,6 +1687,16 @@ pub struct ExtState {
     acc_mass: Vec<[f64; 2]>,
     /// Half-iterations completed.
     pub halves: u64,
+    /// Caches of `ext_begin`, kept up to date incrementally: the current strategy profile, the raw leaf reaches of
+    /// both players and the last query. A half-iteration of player `i` changes only `i`'s regrets (and, with the
+    /// gadget, only the opponent's root reach in the opponent's half-iteration), so the next `ext_begin` recomputes
+    /// only `i`'s strategy entries, reaches and beliefs (`stale`); the other player's are the same numbers.
+    cur: Vec<f64>,
+    reach: Vec<f64>,
+    last: Option<LeafQuery>,
+    /// Whose entries are out of date: None before the first `ext_begin` (everything), else the player of the last
+    /// completed half-iteration.
+    stale: Option<usize>,
 }
 
 impl Cfr {
@@ -1651,6 +1714,7 @@ impl Cfr {
             pred: vec![0.0; w.n_entries],
             gadget: None,
             ext: None,
+            ext_fresh: false,
         }
     }
 
@@ -1742,6 +1806,7 @@ impl Cfr {
                     dneg,
                     ext: &[],
                     par_min: w.par_min(self.threads),
+                    cur: None,
                 };
                 let r = self.root_reaches(false);
                 let mut out = vec![0.0; w.root_hands(i).len()];
@@ -1768,15 +1833,36 @@ impl Cfr {
             acc: vec![0.0; w.n_leaf_values],
             acc_mass: vec![[0.0; 2]; w.value_leaves.len()],
             halves: 0,
+            cur: Vec::new(),
+            reach: Vec::new(),
+            last: None,
+            stale: None,
         });
         assert!(st.query.is_none(), "ext_begin called twice without ext_end");
         if st.phase == 0 {
             self.t += 1;
         }
-        let prof = self.current(w);
-        let reach = w.leaf_reaches(&prof, &self.root_reaches(false));
+        let only = if self.ext_fresh { None } else { st.stale };
+        let (mut cur, mut reach, last) =
+            (std::mem::take(&mut st.cur), std::mem::take(&mut st.reach), st.last.take());
+        cur.resize(w.n_entries, 0.0);
+        reach.resize(w.n_leaf_values, 0.0);
+        self.current_into(w, &mut cur, only);
+        let roots = self.root_reaches(false);
+        let mut q = last.filter(|_| only.is_some()).unwrap_or_else(|| LeafQuery {
+            beliefs: vec![0.0; w.n_leaf_values],
+            mass: vec![[0.0; 2]; w.value_leaves.len()],
+        });
+        for p in (0..2).filter(|&p| only.is_none_or(|i| i == p)) {
+            w.leaf_reaches_of(&cur, p, &roots[p], &mut reach);
+            for leaf in &w.value_leaves {
+                let r = leaf.off[p] as usize..leaf.off[p] as usize + leaf.n[p] as usize;
+                q.beliefs[r.clone()].copy_from_slice(&reach[r]);
+            }
+            q.normalize(w, p);
+        }
         let st = self.ext.as_mut().expect("external state");
-        st.query = Some(LeafQuery::from_reaches(w, &reach));
+        (st.cur, st.reach, st.query) = (cur, reach, Some(q));
         st.query.as_ref().expect("query")
     }
 
@@ -1792,6 +1878,7 @@ impl Cfr {
             return Err(format!("leaf value {x} is {}", values[x]));
         }
         let query = st.query.take().expect("pending query");
+        let cur = std::mem::take(&mut st.cur);
         let i = st.phase;
         let o = 1 - i;
         let (wt, dpos, dneg) = self.weights();
@@ -1805,6 +1892,7 @@ impl Cfr {
                 dneg,
                 ext: &values,
                 par_min: w.par_min(self.threads),
+                cur: Some(&cur),
             };
             let r = self.root_reaches(false);
             let mut scratch = vec![0.0; w.scratch_len];
@@ -1818,6 +1906,8 @@ impl Cfr {
             g.solve_at_leaf(w, &self.ranges[g.player]);
         }
         let st = self.ext.as_mut().expect("external state");
+        st.cur = cur;
+        st.stale = Some(i);
         for (j, leaf) in w.value_leaves.iter().enumerate() {
             let x = wt * query.mass[j][i];
             st.acc_mass[j][i] += x;
@@ -1829,9 +1919,21 @@ impl Cfr {
             }
         }
         st.values = values;
+        st.last = Some(query);
         st.phase = o;
         st.halves += 1;
         Ok(())
+    }
+
+    /// Frees the caches `ext_begin` keeps between half-iterations (between half-iterations only, after a solve: the
+    /// next `ext_begin`, if any, recomputes them, with the same numbers).
+    pub fn ext_release(&mut self) {
+        if let Some(st) = self.ext.as_mut().filter(|st| st.query.is_none()) {
+            st.cur = Vec::new();
+            st.reach = Vec::new();
+            st.last = None;
+            st.stale = None;
+        }
     }
 
     /// Per value leaf and player `p`: `p`'s values averaged over the other player's half-iterations with the weights
@@ -1858,6 +1960,27 @@ impl Cfr {
     /// The average strategy (normalised profile table).
     pub fn average(&self, w: &Window) -> Vec<f64> {
         w.normalized(&self.avg)
+    }
+
+    /// [`Cfr::current`] into `cur` at the nodes of player `only` (every node if None): regret matching on the regrets
+    /// (plus predictions for PCFR+), node by node, as the CFR walk computes it (the same numbers as `current`).
+    fn current_into(&self, w: &Window, cur: &mut [f64], only: Option<usize>) {
+        let pred = (self.algo == Algo::PcfrPlus).then_some(&self.pred[..]);
+        for (n, node) in w.nodes.iter().enumerate() {
+            if only.is_some_and(|p| node.mover as usize != p) {
+                continue;
+            }
+            let (animals, ne) = w.animals(n);
+            let masks = w.node_hands(n, node.mover as usize);
+            let r = node.entry..node.entry + masks.len() * ne;
+            regret_match(
+                &self.reg[r.clone()],
+                pred.map(|p| &p[r.clone()]),
+                masks,
+                &animals[..ne],
+                &mut cur[r],
+            );
+        }
     }
 
     /// The current strategy (regret matching on the accumulated regrets, plus predictions for PCFR+).
