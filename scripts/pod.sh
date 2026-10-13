@@ -3,7 +3,7 @@
 #
 #   scripts/pod.sh up NAME [GPU_ID]      create a pod (CLOUDS="COMMUNITY SECURE" order), wait for ssh, print its id
 #   scripts/pod.sh setup ID              sync the repo, install rust, build the engine, check golden
-#   scripts/pod.sh sync ID               rsync the repo to /workspace/beastybar-ai (no .git, .venv, target, runs),
+#   scripts/pod.sh sync ID               rsync the repo to /workspace/beastybar-ai (no .git, .venv, target, runs, data),
 #                                        write its provenance to REVISION there, rebuild the engine if needed
 #   scripts/pod.sh ssh ID [CMD...]       run a command in the repo dir (interactive shell without CMD)
 #   scripts/pod.sh bg ID NAME CMD...     run CMD detached; log at runs/NAME.log on the pod
@@ -67,7 +67,7 @@ except Exception: pass' 2>/dev/null || true)
     rsh "$id" "mkdir -p $REMOTE"
     rsync -az --delete -e "ssh ${SSH_OPTS[*]} -p $port" \
       --exclude .git --exclude .venv --exclude target --exclude runs --exclude '__pycache__' \
-      --exclude '*.so' --exclude checkpoints \
+      --exclude '*.so' --exclude checkpoints --exclude data \
       "$REPO/" "$host:$REMOTE/"
     # The pod has no .git: record the commit and code hash (bbar/provenance.py) for the results log.
     py="$REPO/.venv/bin/python"; [ -x "$py" ] || py=python3

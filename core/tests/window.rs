@@ -70,6 +70,7 @@ fn brute_value(w: &Window, prof: &[f64], child: Child, h: [usize; 2]) -> f64 {
             let leaf = w.frontier[f as usize];
             w.values[leaf.off as usize + h[leaf.mover as usize]]
         }
+        Child::Value(_) => unreachable!("no value leaves here"),
         Child::Node(n) => {
             let n = n as usize;
             let node = &w.nodes[n];
