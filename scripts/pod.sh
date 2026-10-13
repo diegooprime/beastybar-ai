@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Drive RunPod pods from the laptop. All computation runs on pods; stop them when idle.
 #
-#   scripts/pod.sh up NAME [GPU_ID]      create a pod (CLOUDS="COMMUNITY SECURE" order), wait for ssh, print its id
+#   scripts/pod.sh up NAME [GPU_ID]      create a pod (CLOUDS="COMMUNITY SECURE" order, GPUS=1), wait for ssh, print its id
 #   scripts/pod.sh setup ID              sync the repo, install rust, build the engine, check golden
 #   scripts/pod.sh sync ID               rsync the repo to /workspace/beastybar-ai (no .git, .venv, target, runs, data),
 #                                        write its provenance to REVISION there, rebuild the engine if needed
@@ -50,7 +50,7 @@ case "$cmd" in
   up)
     name=$1; gpu=${2:-"NVIDIA GeForce RTX 4090"}
     for cloud in ${CLOUDS:-COMMUNITY SECURE}; do
-      out=$(runpodctl pod create --name "$name" --template-id runpod-torch-v280 --gpu-id "$gpu" \
+      out=$(runpodctl pod create --name "$name" --template-id runpod-torch-v280 --gpu-id "$gpu" --gpu-count "${GPUS:-1}" \
             --cloud-type "$cloud" --container-disk-in-gb 40 2>&1 || true)
       id=$(echo "$out" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin)["id"])
