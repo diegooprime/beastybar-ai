@@ -26,6 +26,7 @@ target/
 # their summary lines there; per-position files such as runs/e2/NAME.jsonl stay local)
 runs/*
 !runs/results.jsonl
+!runs/delta-summary.jsonl
 # commit id written on pods by scripts/pod.sh sync
 REVISION
 
