@@ -7,14 +7,23 @@ hash, seeds, 95% interval) or a `bbar.delta` run noted with it.
 
 ## Best player and measured strength
 
-No player is yet strong in the mission's sense (worst case). Two are about equal head to head:
+**Best player: the re-solving player** `resolve:V=checkpoints/value/v2c/best.pt,base=nn:checkpoints/bp-v1/step_30518.pt,P0=8,F=10,d=2,iters=200,mode=plain`
+(blueprint network for plies 0-7, a depth-limited CFR solve with value-network leaves at every own decision from
+ply 8, the exact window from ply 10). It is not yet strong in the mission's sense: plies 0-7 are still the
+blueprint's, and the exploitability below covers only play from ply 9 on.
 
-| Player | vs greedy | vs `pimc:w=32,d=6` | vs `pimc:w=128,d=8` | Exploitability (lower bounds) |
-|---|---|---|---|---|
-| `pimc:w=128,d=8` (search) | 96.7 [96.0, 97.3] | 57.4 [55.8, 59.0] | - | not measured |
-| blueprint `bp-v1` final (network) | - | 53.2 [51.9, 54.4] | 48.4 [47.2, 49.6] | >= 0.111 [0.104, 0.118] (exact best response from ply 9) |
-| blueprint `bp-v1` step 8000 | 92.9 [92.1, 93.6] | 48.6 [47.3, 49.9] | - | >= 0.127 [0.119, 0.135] from ply 9; >= 0.022 [0.018, 0.026] by a PPO exploiter |
-| `pimc:w=8,d=4` | 90.1 [88.8, 91.2] | 34.4 [32.7, 36.1] | 29.3 [27.7, 30.9] | >= 0.161 [0.157, 0.165] (PPO exploiter) |
+| Player | vs blueprint final | vs `pimc:w=128,d=8` | Exploitability (lower bounds) |
+|---|---|---|---|
+| **resolve, plain** (v2c) | 59.6 [57.4, 61.7] | 62.6 [59.7, 65.3] | >= 0.015 [0.012, 0.019] from ply 9 |
+| resolve, safe (v2c) | 58.8 [56.6, 60.9] | - | >= 0.023 [0.020, 0.027] from ply 9 |
+| `pimc:w=128,d=8` (search) | 51.6 [50.4, 52.8] | - | not measured |
+| blueprint `bp-v1` final (network) | - | 48.4 [47.2, 49.6] | >= 0.111 [0.104, 0.118] from ply 9 |
+| blueprint `bp-v1` step 8000 | 42.7 [41.6, 43.8] | - | >= 0.127 [0.119, 0.135] from ply 9; >= 0.022 [0.018, 0.026] by a PPO exploiter |
+| `pimc:w=8,d=4` | - | 29.3 [27.7, 30.9] | >= 0.161 [0.157, 0.165] (PPO exploiter) |
+
+"From ply 9": an exact best response that copies the player until ply 9 and then plays perfectly gains this much over
+0.5 (`bbar.delta`, 100-200 self-play positions, seed 1001). Resolve matches: 400 deal pairs vs the blueprint, 300 vs
+PIMC; other rows 1000-2000.
 
 Scores: win 1, draw 0.5, loss 0, duplicate deal pairs (2000 for blueprint rows, 1000 for PIMC, 20,000 for
 exploiters). Exploitability = best responder's score - 0.5.
@@ -31,8 +40,11 @@ What we have learned:
   Depth-limited solving with exact leaf values is nearly unexploitable (1e-6..2e-4, E2 oracle). With a learned PBS
   value network at the leaves (held-out error 0.068), depth-limited play from ply 10 is 0.020 [0.014, 0.025]
   exploitable (E2, 48 positions) against the blueprint's 0.100 there. Value-net error falls slowly with data
-  (0.070 / 0.063 / 0.057 at 62k / 139k / 253k public states), so search depth and better features matter too. Next:
-  the re-solving player (docs/PLAN.md, M4) measured end to end.
+  (0.070 / 0.063 / 0.057 at 62k / 139k / 253k public states); option features (what playing each animal now
+  would do) reach 0.0555 with 60% of the data (v3h).
+- **Re-solving works end to end.** With that value network the re-solving player cuts exploitability from ply 9 from
+  0.111 (blueprint) to 0.015 and beats every earlier player. Next: the cascade (value labels for plies 8 down to 0) so
+  the search starts at ply 0 instead of 8.
 
 ## What exists
 
