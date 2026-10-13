@@ -84,6 +84,8 @@ except Exception: pass' 2>/dev/null || true)
       fi
     done
     echo "no capacity for $gpu" >&2; exit 1 ;;
+  target)
+    target "$1" ;;
   sync)
     id=$1
     read -r host port < <(target "$id")
