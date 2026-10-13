@@ -290,6 +290,7 @@ mod _core {
     #[pymodule_init]
     fn init(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
         crate::python_env::register(m)?;
+        crate::python_tail::register(m)?;
         crate::python_solve::register(m)
     }
 }

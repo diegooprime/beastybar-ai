@@ -15,6 +15,7 @@ pub mod features;
 pub mod hands;
 pub mod markov;
 pub mod pisolve;
+pub mod policy_obs;
 pub mod rng;
 pub mod search;
 mod state;
@@ -27,6 +28,8 @@ mod python;
 mod python_env;
 #[cfg(feature = "pyo3")]
 mod python_solve;
+#[cfg(feature = "pyo3")]
+mod python_tail;
 
 /// Fingerprint of the sources this crate was compiled from (core/build.rs; bbar/provenance.py checks it).
 pub const BUILD_ID: &str = env!("BBAR_BUILD_ID");

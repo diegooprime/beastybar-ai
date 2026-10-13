@@ -8,16 +8,43 @@
 //! tests/test_match.py). Decisions depend only on the env's position, history and seat RNG, never on the thread
 //! count or on which pooled agent instance handles the env (search tables do not change decisions: info_leaks.rs).
 //!
-//! [`VecEnv::uniforms`] gives network agents their sampling draws from the same seat RNGs.
+//! [`VecEnv::uniforms`] gives network agents their sampling draws from the same seat RNGs: one draw per decision.
+//! [`VecEnv::views`] gives agents written in Python the same draw (so a Python agent that samples a network with it
+//! replays that network move for move), plus the mover's view and a private seed from a stream derived from that
+//! draw (the seat RNG is not advanced further).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::agents::{Agent, Spec};
+use crate::arena::derive_seed;
 use crate::env::{AgentSlot, VecEnv};
 use crate::features::MAX_PLIES;
+use crate::rng::Rng;
+use crate::state::State;
 use crate::view::view;
+
+/// `derive_seed` path tag of the private stream of a Python agent's decision ([`VecEnv::views`]).
+const PRIVATE_STREAM: u64 = 5;
+
+/// A uniform in [0, 1) from the top 53 bits of a draw.
+fn unit(x: u64) -> f64 {
+    (x >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+}
+
+/// What an agent outside this crate gets for one decision ([`VecEnv::views`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutsideDecision {
+    /// The mover's view: own hand and public state true, hidden cards freshly randomized.
+    pub view: State,
+    /// Every action played so far.
+    pub history: Vec<u8>,
+    /// A seed for the agent's own private random stream.
+    pub seed: u64,
+    /// The seat RNG's draw for this decision, as [`VecEnv::uniforms`] would give it.
+    pub uniform: f64,
+}
 
 /// One agent per worker thread for one spec, reusable across calls (searchers keep their allocations).
 pub struct AgentPool {
@@ -129,6 +156,41 @@ impl VecEnv {
         Ok(())
     }
 
+    /// For agents written outside this crate (Python agents, bbar/match.py), one decision per env of `envs` (distinct
+    /// indices), for the player to move there. Takes exactly one draw `x` from that seat's agent RNG, the draw a
+    /// network in that seat takes ([`VecEnv::uniforms`]), and returns it as `uniform`; the view (`view(state, p, rng)`,
+    /// as a built-in agent gets it: hidden cards freshly randomized) and the private `seed` come from a stream keyed by
+    /// `x` (`derive_seed(x, [PRIVATE_STREAM])`), so the seat RNG advances by one draw per decision whatever the agent
+    /// is: a Python agent sampling a network with `uniform` makes that network's decisions move for move. Nothing is
+    /// played.
+    pub fn views(&mut self, envs: &[usize]) -> Result<Vec<OutsideDecision>, String> {
+        let n = self.len();
+        let mut seen = vec![false; n];
+        for &i in envs {
+            if i >= n {
+                return Err(format!("env index {i} out of range ({n} envs)"));
+            }
+            if std::mem::replace(&mut seen[i], true) {
+                return Err(format!("env {i} given twice"));
+            }
+        }
+        let mut slots: Vec<AgentSlot<'_>> = self.agent_slots().collect();
+        Ok(envs
+            .iter()
+            .map(|&i| {
+                let slot = &mut slots[i];
+                let s = slot.state;
+                let p = s.to_move;
+                let x = slot.seat_rngs[p as usize].next_u64();
+                let mut private = Rng::new(derive_seed(x, &[PRIVATE_STREAM]));
+                let view = view(s, p, &mut private);
+                let seed = private.next_u64();
+                let history = slot.hist.plies().iter().map(|ply| ply.action).collect();
+                OutsideDecision { view, history, seed, uniform: unit(x) }
+            })
+            .collect())
+    }
+
     /// One uniform draw in [0, 1) (53 bits) from the agent RNG of the player to move in each env of `envs`: the
     /// sampling randomness of a network agent in that seat (inverse-CDF sampling, bbar/match.py).
     pub fn uniforms(&mut self, envs: &[usize], out: &mut [f64]) -> Result<(), String> {
@@ -141,7 +203,7 @@ impl VecEnv {
         for (o, &i) in out.iter_mut().zip(envs) {
             let slot = &mut slots[i];
             let p = slot.state.to_move as usize;
-            *o = (slot.seat_rngs[p].next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64);
+            *o = unit(slot.seat_rngs[p].next_u64());
         }
         Ok(())
     }
@@ -353,6 +415,55 @@ mod tests {
         other.act(&mut pool, &[0, 1], &mut o1).unwrap();
         env2.act(&mut pool, &[0, 1], &mut o2).unwrap();
         assert_eq!(o1, o2);
+    }
+
+    #[test]
+    fn views_for_outside_agents_are_the_movers_information_from_the_seat_rng() {
+        // A twin env asks for the network draws (`uniforms`) where the first asks for views: the draws are the
+        // same, so the seat RNGs advance by exactly one draw per decision in both.
+        let run = |threads: usize| {
+            let n = 30;
+            let mut env = VecEnv::new(n, 4, threads);
+            let mut twin = VecEnv::new(n, 4, threads);
+            let mut rng = Rng::new(3);
+            let (mut done, mut result, mut margin) = (vec![false; n], vec![0.0; n], vec![0i64; n]);
+            let mut log = Vec::new();
+            let mut hidden_differs = 0;
+            for _ in 0..25 {
+                let envs: Vec<usize> = (0..n).rev().filter(|i| i % 4 != 2).collect();
+                let got = env.views(&envs).unwrap();
+                let mut want_u = vec![0.0; envs.len()];
+                twin.uniforms(&envs, &mut want_u).unwrap();
+                for ((&i, d), &u) in envs.iter().zip(&got).zip(&want_u) {
+                    let s = env.state(i);
+                    let p = s.to_move;
+                    // In the mover's information set: its view of the view is its view of the truth.
+                    assert_eq!(view(&d.view, p, &mut Rng::new(1)), view(s, p, &mut Rng::new(1)));
+                    let want: Vec<u8> = env.history(i).plies().iter().map(|x| x.action).collect();
+                    assert_eq!(d.history, want);
+                    assert_eq!(d.uniform, u);
+                    assert!((0.0..1.0).contains(&d.uniform));
+                    hidden_differs += (d.view != *s) as usize;
+                }
+                log.push(got);
+                let actions: Vec<i64> = (0..n)
+                    .map(|i| {
+                        let legal = env.state(i).legal_actions();
+                        legal.nth_action(rng.below(legal.len())) as i64
+                    })
+                    .collect();
+                env.step(&actions, &mut done, &mut result, &mut margin).unwrap();
+                twin.step(&actions, &mut done, &mut result, &mut margin).unwrap();
+            }
+            assert!(hidden_differs > 100);
+            let seeds: std::collections::HashSet<u64> = log.iter().flatten().map(|d| d.seed).collect();
+            assert_eq!(seeds.len(), log.iter().map(Vec::len).sum::<usize>());
+            log
+        };
+        assert_eq!(run(1), run(3));
+        let mut env = VecEnv::new(4, 0, 1);
+        assert!(env.views(&[1, 1]).is_err());
+        assert!(env.views(&[4]).is_err());
     }
 
     #[test]
