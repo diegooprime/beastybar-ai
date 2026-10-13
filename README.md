@@ -7,19 +7,24 @@ hash, seeds, 95% interval) or a `bbar.delta` run noted with it.
 
 ## Best player and measured strength
 
-**Best player: the re-solving player** `resolve:V=checkpoints/value/v2c/best.pt,base=nn:checkpoints/bp-v1/step_30518.pt,P0=8,F=10,d=2,iters=200,mode=plain`
+**Best player: the re-solving player** `resolve:V=checkpoints/value/v3h/best.pt,base=nn:checkpoints/bp-v1/step_30518.pt,P0=8,F=10,d=2,iters=200,mode=plain`
 (blueprint network for plies 0-7, a depth-limited CFR solve with value-network leaves at every own decision from
 ply 8, the exact window from ply 10). It is not yet strong in the mission's sense: plies 0-7 are still the
 blueprint's, and the exploitability below covers only play from ply 9 on.
 
 | Player | vs blueprint final | vs `pimc:w=128,d=8` | Exploitability (lower bounds) |
 |---|---|---|---|
-| **resolve, plain** (v2c) | 59.6 [57.4, 61.7] | 62.6 [59.7, 65.3] | >= 0.015 [0.012, 0.019] from ply 9 |
+| **resolve, plain** (v3h) | - | - | >= 0.0106 [0.0087, 0.0126] from ply 9 |
+| resolve, plain (v2c) | 59.6 [57.4, 61.7] | 62.6 [59.7, 65.3] | >= 0.015 [0.012, 0.019] from ply 9 |
 | resolve, safe (v2c) | 58.8 [56.6, 60.9] | - | >= 0.023 [0.020, 0.027] from ply 9 |
 | `pimc:w=128,d=8` (search) | 51.6 [50.4, 52.8] | - | not measured |
 | blueprint `bp-v1` final (network) | - | 48.4 [47.2, 49.6] | >= 0.111 [0.104, 0.118] from ply 9 |
 | blueprint `bp-v1` step 8000 | 42.7 [41.6, 43.8] | - | >= 0.127 [0.119, 0.135] from ply 9; >= 0.022 [0.018, 0.026] by a PPO exploiter |
 | `pimc:w=8,d=4` | - | 29.3 [27.7, 30.9] | >= 0.161 [0.157, 0.165] (PPO exploiter) |
+
+Head to head the resolve variants are level: v3h vs v2c 51.4% [49.5, 53.3]; exact from ply 9 vs from ply 10 50.7%
+[48.8, 52.5]; search from ply 6 (first cascade net) vs from ply 8 49.0% [46.8, 51.2] (300 deal pairs each). Between
+strong players, exploitability is the discriminating measure.
 
 "From ply 9": an exact best response that copies the player until ply 9 and then plays perfectly gains this much over
 0.5 (`bbar.delta`, 100-200 self-play positions, seed 1001). Resolve matches: 400 deal pairs vs the blueprint, 300 vs
