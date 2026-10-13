@@ -14,6 +14,7 @@
 #   scripts/pod.sh backup ID             pull data/, checkpoints/ and runs/ into backups/<pod id>/ (no deletes): pods
 #                                        can vanish (e.g. when the account balance runs out), so back up often
 #   scripts/pod.sh autobackup ID [MIN]   backup every MIN minutes (default 10) until the pod is gone
+#   scripts/pod.sh status               every pod: name, $/hr, vCPUs, 1-min load, running bbar jobs (IDLE if none)
 #   scripts/pod.sh guard [USD]           every 5 min: if the account balance < USD (default 2.5), back up and delete
 #                                        every pod (RunPod terminates pods, losing their disks, once it is negative)
 #   scripts/pod.sh push ID PATH          rsync PATH (relative to repo) to the pod (e.g. a checkpoint: sync skips them)
@@ -133,6 +134,16 @@ except Exception: pass' 2>/dev/null || true)
     id=$1; every=${2:-10}
     while target "$id" >/dev/null; do "$0" backup "$id" >/dev/null 2>&1 || true; sleep $((60 * every)); done
     echo "pod $id is gone; last backup in backups/$id" ;;
+  status)
+    runpodctl pod list 2>/dev/null | python3 -c 'import json,sys; [print(p["id"], p["name"], p["costPerHr"]) for p in json.load(sys.stdin)]' |
+    while read -r id name cost; do
+      remote='echo $(cut -d" " -f1 /proc/loadavg) $(pgrep -af "python -m [b]bar" | grep -o "bbar[.a-z_]*" | sort | uniq -c | awk "{printf \"%s:%s,\", \$2, \$1}")'
+      info=$("$0" ssh "$id" "$remote" < /dev/null 2>/dev/null)
+      vcpu=$(runpodctl pod get "$id" 2>/dev/null | grep -o '"vcpuCount": [0-9]*' | grep -o '[0-9]*$')
+      load=$(echo "$info" | cut -d" " -f1); jobs=$(echo "$info" | cut -s -d" " -f2-)
+      state=busy; [ -z "$jobs" ] && state=IDLE
+      printf "%-15s %-12s \$%-5s vcpu %-3s load %-6s %-5s %s\n" "$id" "$name" "$cost" "${vcpu:-?}" "${load:-?}" "$state" "$jobs"
+    done ;;
   guard)
     floor=${1:-2.5}
     while true; do
