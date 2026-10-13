@@ -29,7 +29,7 @@ fn named(cards: &[u8]) -> Vec<(&'static str, u8)> {
 #[pyclass(module = "bbar._core", skip_from_py_object)]
 #[derive(Clone)]
 pub struct Game {
-    state: State,
+    pub(crate) state: State,
 }
 
 #[pymethods]
@@ -185,4 +185,9 @@ fn bench(py: Python<'_>, n_games: u64, seed: u64) -> (u64, u64, f64) {
 mod _core {
     #[pymodule_export]
     use super::{Game, bench};
+
+    #[pymodule_init]
+    fn init(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
+        crate::python_solve::register(m)
+    }
 }
