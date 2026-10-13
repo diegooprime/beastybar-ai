@@ -3,8 +3,8 @@
 //!
 //! Every env always has a player to move. Env `i` draws its deals from its own RNG stream, derived from
 //! `(seed, i)`, and its `k`-th game (k = 0, 1, ...) starts with player `(i + k) % 2`, so a run is reproducible from
-//! the seed and the starting seat is balanced. [`VecEnv::reset_deals`] installs given deals (duplicate-deal
-//! evaluation) without touching the RNG streams.
+//! the seed and the starting seat is balanced. [`VecEnv::reset_deals`], [`VecEnv::reset_arena`] and [`VecEnv::reset_states`]
+//! install given deals (duplicate-deal evaluation, playing a human: bbar/play.py) without touching the RNG streams.
 //!
 //! Every game also carries one agent RNG per seat, for built-in agents acting inside the env (`crate::env_act`) and
 //! for the sampling draws of network agents: an agent in seat s builds its views and acts with seat s's RNG, exactly
@@ -22,11 +22,12 @@ use crate::action::NUM_ACTIONS;
 use crate::arena::{self, derive_seed};
 use crate::features::{History, OBS_DIM, PRIV_DIM, encode_mask, encode_obs_zeroed, encode_privileged, ply};
 use crate::rng::Rng;
-use crate::state::State;
+use crate::state::{DECK_CAP, State};
 
 /// `derive_seed` path tags of the seat RNGs (distinct from the arena's DEAL = 1 and GAME = 2).
 const SEAT_STREAM: u64 = 3;
 const SEAT_RESET: u64 = 4;
+const SEAT_GIVEN: u64 = 6;
 
 /// How an episode ended, from player 0's side.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -268,6 +269,25 @@ impl VecEnv {
         }
     }
 
+    /// Env `i` restarts from the given deal `states[i]`: no move played yet, 4 animals in each hand and 8 in each
+    /// deck. The seat RNGs restart from `derive_seed(env seed, [SEAT_GIVEN, i, keys[i], s])`. The envs' own deal
+    /// streams are untouched. Errors (changing nothing) if a state is not such a deal.
+    pub fn reset_states(&mut self, states: &[State], keys: &[u64]) -> Result<(), String> {
+        assert!(states.len() == self.len() && keys.len() == self.len());
+        for (i, s) in states.iter().enumerate() {
+            let dealt = (0..2).all(|p| s.hands[p].count_ones() == 4 && s.deck_len[p] as usize == DECK_CAP);
+            if !dealt || ply(s) != 0 || s.to_move != s.start {
+                return Err(format!("state {i} is not a fresh deal (4 animals in each hand, 8 in each deck)"));
+            }
+        }
+        for (i, ((slot, state), &key)) in self.slots.iter_mut().zip(states).zip(keys).enumerate() {
+            slot.state = *state;
+            slot.hist.clear();
+            slot.seat_rngs = seat_rngs(self.seed, [SEAT_GIVEN, i as u64, key]);
+        }
+        Ok(())
+    }
+
     /// Env `j` restarts from game `games[j]` of deal `deals[j]` of an arena match with `seed`
     /// (`core/src/arena.rs`): the deal `arena::deal(seed, deals[j])`, and the seat RNGs the arena gives that game
     /// ([`arena::seat_rng`]). In game 0, agent A sits in seat 0; in game 1, in seat 1. The envs' own deal streams
@@ -410,6 +430,36 @@ mod tests {
                 assert_eq!(s as usize, (i + k) % 2, "starting player alternates per env");
             }
         }
+    }
+
+    #[test]
+    fn reset_states_installs_given_deals() {
+        let mut env = VecEnv::new(2, 5, 1);
+        let deals = [State::deal(&mut Rng::new(21), 1), State::deal(&mut Rng::new(22), 0)];
+        env.reset_states(&deals, &[7, 7]).unwrap();
+        for i in 0..2 {
+            assert_eq!(*env.state(i), deals[i]);
+            assert_eq!(env.history(i).len(), 0);
+        }
+        // Same deal, env and key: same seat RNGs; another key: others.
+        let draw = |env: &mut VecEnv| {
+            let mut out = [0.0; 1];
+            env.uniforms(&[0], &mut out).unwrap();
+            out[0]
+        };
+        let first = draw(&mut env);
+        env.reset_states(&deals, &[7, 7]).unwrap();
+        assert_eq!(draw(&mut env), first);
+        env.reset_states(&deals, &[8, 7]).unwrap();
+        assert_ne!(draw(&mut env), first);
+        // Anything but a fresh deal is refused and changes nothing.
+        let mut played = deals[0];
+        played.apply(played.legal_actions().nth_action(0));
+        let before = *env.state(1);
+        assert!(env.reset_states(&[deals[0], played], &[1, 1]).is_err());
+        assert_eq!(*env.state(1), before);
+        let start = State::new(0, [0xfff, 0xfff], [&[], &[]]);
+        assert!(env.reset_states(&[start, deals[1]], &[1, 1]).is_err());
     }
 
     #[test]

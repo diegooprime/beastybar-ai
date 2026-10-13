@@ -263,6 +263,20 @@ impl PyVecEnv {
         Ok(())
     }
 
+    /// Env `i` restarts from `games[i]`, a fresh deal (no move played, 4 animals in each hand and 8 in each deck, e.g.
+    /// `Game(start, hands, decks)` or `Game.random(seed, start)`), its seat RNGs from `keys[i]` (uint64; the same
+    /// deal, env and key play the same way). Raises ValueError (changing nothing) if a game is not a fresh deal.
+    /// Auto-reset deals are unaffected. bbar/play.py: the true game of a human's match.
+    fn reset_games(&mut self, games: Vec<PyRef<'_, Game>>, keys: &Bound<'_, PyAny>) -> PyResult<()> {
+        let keys = u64s(keys)?;
+        let n = self.env.len();
+        if games.len() != n || keys.len() != n {
+            return Err(PyValueError::new_err(format!("expected {n} games and {n} keys")));
+        }
+        let states: Vec<State> = games.iter().map(|g| g.state).collect();
+        self.env.reset_states(&states, &keys).map_err(PyValueError::new_err)
+    }
+
     /// int64 [n, 2]: final points of both players in the last game that ended in each env.
     fn final_scores<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let n = self.env.len();
