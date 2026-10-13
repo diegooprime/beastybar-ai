@@ -1,54 +1,38 @@
 # Session state (training day, 2026-10-13)
 
 Working notes for whoever continues (human or agent). README.md is the project's public state; this is the live
-operations log for the one-day $50 compute push (deadline ~23:30 UTC, then no more compute).
+operations log for the one-day $50 compute push (2026-10-13; ended ~22:55 UTC).
 
-## Pods (scripts/pod.sh status shows load and jobs; addresses cached in $TMPDIR/bbar-pod-targets)
+## Pods
 
-| id | name | GPU | vCPU | $/hr | job (20:05 UTC) |
-|---|---|---|---|---|---|
-| ulq9kbd5vy7dux | bb-cascade | 2xA40 | 21 | 1.18 | HUB: fast cascade labels plies 8-9 (c5-p8-9), then trains c5-1 |
-| hqxg7gb65gwyn7 | bb-eval | 4090 | 12 | 0.89 | delta_8: blueprint, then resolve v3h P0=8 F=10 |
-| 59uyapmvn5edyp | bb-x9 | 2xA40 | 19 | 1.18 | fast cascade labels plies 8-9 |
-| 5e1w9a89lkgyni | bb-h1 | A40 | 9 | 0.59 | fast cascade labels plies 8-9 |
-| l2g2inejf282uk | bb-h2 | 4090 | 16 | 0.89 | fast cascade labels plies 8-9 |
-| yx303cn3c0gitu | bb-h3 | L40S | 32 | 1.09 | fast cascade labels plies 8-9 |
-| kbzyl5qyif7wis | bb-h4 | L40S | 16 | 1.09 | fast cascade labels plies 8-9 |
-| 6wrlrhu9dkag90 | bb-h5 | 4090 | 12 | 0.89 | fast cascade labels plies 8-9 |
-| owfo950omfwmja | bb-h6 | A40 | 9 | 0.59 | fast cascade labels plies 8-9 |
+None: the training day ended at ~22:55 UTC and every pod was deleted (budget spent). Their data and checkpoints were
+backed up to the laptop (backups/<pod id>/, gitignored; `scripts/pod.sh autobackup`), the final networks are in
+checkpoints/value/ (c5-2 = best, c5m, c5h), and every result is in runs/results.jsonl and runs/delta-summary.jsonl.
 
-Cascade labels: `bbar.value.cascade labels --net checkpoints/value/v3m/best.pt --out data/value/c5-p8-9 --plies 8,9
---d 2 --max-leaf-ply 10 --iters 200 --jobs 128 --minutes ~28` (seeds 501-503, 511-515), ending ~20:31. Exact ply-9
-labels (x9, ~12k) are gathered on the hub. scripts/gather.sh HUB DIR -- PODS collects shards onto the hub.
+## Data and networks (local, gitignored)
 
-## Data and networks (local copies in data/ and checkpoints/, all gitignored)
-
-- Exact labels plies 10-13: data/value/{v2,v2q,v3,v3q} (~430k). Cascade labels: c3-p8-9, c4-p8-9 (~30k), c4-p6-7 (6.5k),
-  c4-p4-5 (~14k + hub's) on the hub (backups/ulq9kbd5vy7dux).
-- Value nets (PBS v2 unless noted): v2c (MLP, v1 features, test 0.0568), v3m (MLP 1024x6, 0.0568), v3h (hand 768x4,
-  0.0555, best), c4-1 (cascade, plies 8-13), c4-2.
+- Exact labels: plies 10-13 data/value/{v2,v2q,v3,v3q} (~430k); plies 9-10 x9 (15k) and x10 (91k) in
+  backups/ulq9kbd5vy7dux/data/value/.
+- Cascade labels (depth-limited solves with the previous net): c5-p8-9 (278k), c5-p6-7 (79k), older c3/c4 sets,
+  same backup directory.
+- Value nets (PBS v2 except v2c, v1 features): c5-2 (MLP 1024x6, all 931k labels, test 0.0444; the best player's), c5m
+  (MLP, before x10 and c5-p6-7, 0.0459), c5h (hand 768x4, 0.0458), v3h (0.0555), older v2c, v3m, c4-1, c4-2.
 - Blueprint: checkpoints/bp-v1/step_30518.pt.
 
-## Results so far (evidence: runs/results.jsonl, runs/delta-summary.jsonl)
+## Final results of the day
 
-- resolve plain (v2c, P0=8, F=10): 59.6% vs blueprint, 62.6% vs pimc:w=128,d=8; delta_9 0.0151. safe: 58.8%, 0.0233.
-- resolve plain v3h: delta_9 0.0106 [0.0087, 0.0126]; vs v2c-resolve 51.4% [49.5, 53.3] (head to head flat).
-- resolve P0=6 vs P0=8 (c4-1): 49.0% [46.8, 51.2]: early search with thin cascade labels did not help.
-- resolve F=9 (v3h) vs blueprint, 16 deals: 65.6% (timing only); F=9 vs F=10 match running.
+- Best player: resolve c5-2, P0=8, F=9 (README). delta_8 pooled over seeds 1001-1024 for c5-2 and c5m, seed 1001 for the
+  blueprint and v3h (scripts/delta_pool.py); c5-2 beats c5m position by position; matches of the c5m variant: 62.6% vs
+  blueprint (500 pairs), 61.3% vs PIMC d=8.
+- Not done for lack of time: P0 < 8 with the c5 nets; exploitability before ply 8; a cascade level at plies 4-5 with
+  the fast solver.
 
-## In flight on the laptop (workflows)
+## Next session, in order
 
-- play-ui (worktree .worktrees/ui): local web UI `python -m bbar.play`, in fix phase.
-- dl-speed (worktree .worktrees/fast): batched Rust WindowBatch + NetValues.session(): ~10x faster depth-limited
-  solving, bit-identical; in fix phase. Merge, then rerun the cascade at 10x volume.
-
-## Plan for the rest of the day
-
-1. Merge dl-speed and play-ui; sync pods.
-2. ~20:10 UTC: x9 generators stop; gather x9 shards on the hub; train v4 (hand + mlp) on exact 9-13 data.
-3. Rerun cascade levels 8-9 and 6-7 with the fast code across all pods; retest P0=6 vs P0=8.
-4. Pick the final player (F=9 vs 10, P0, mode) by head-to-head + delta_9; final matches vs blueprint and pimc:w=128,d=8.
-5. README, results, push; UI default opponent = final player; delete all pods.
+1. Cascade levels 4-5, 2-3, 0-1 with c5-2 and the fast solver; retrain; test P0=6 and P0=4 head to head and by
+   delta_8 (pairs).
+2. More exact labels at plies 9-10 (they lowered the error at the leaves the ply-8 solve queries).
+3. A certified exploitability bound from earlier plies (value-net leaves with their error as slack).
 
 ## Gotchas learned today
 

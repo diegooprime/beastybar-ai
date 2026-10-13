@@ -16,7 +16,7 @@ competing proposals, two judges). Revise when measurements say otherwise; [READM
 ## Player architecture (target)
 
 1. **Perfect-information tail** (ply >= 15): exact minimax.
-2. **Exact window** (ply >= F, F = 12 now, earlier as compute allows): vector CFR over the whole remaining
+2. **Exact window** (ply >= F, F = 9 now; earlier as compute allows): vector CFR over the whole remaining
    hidden-information public tree with private draws, re-solved safely (gadget) once at our first decision in the
    window; exact best response gives a certified per-move gap.
 3. **Before F**: continual re-solving (DeepStack / ReBeL family): full-width depth-limited public trees, leaves valued
@@ -53,7 +53,7 @@ More compute buys strength through: CFR iterations, search depth, value-net data
 ## Status and learnings (2026-10-13)
 
 - M0, M1, M2 done; E1 done for the blueprint; E2 done at small scale; M4 code done (`bbar/resolve.py`,
-  `bbar/value/cascade.py`), not yet measured with a real value net.
+  `bbar/value/cascade.py`), measured (last bullet).
 - Exact windows are much cheaper than estimated (ply 10: ~0.4 s, ply 9: 1-5 s, ply 8: ~2 min, 3 GB), so F = 10 is
   cheap at play time and F = 9 affordable; only plies 0-8 need the value net.
 - The blueprint is exploitable late (exact best response from ply 9: 0.111) while a PPO exploiter finds 0.022:
@@ -63,8 +63,11 @@ More compute buys strength through: CFR iterations, search depth, value-net data
   slope); option features cut it another 5-7%. Even so, depth-1 solving with network leaves from ply 10 is 0.020
   exploitable against the blueprint's 0.100. Depth-2 trees query beliefs unlike the training ranges (leaf error
   0.11): `bbar/value/harvest.py` labels the beliefs solves actually query (DAgger).
-- Next, in order: regenerate labels (single range per state, Bayes ranges, harvested queries, PBS v2); train;
-  measure the resolve player (delta_T at T = 9, 8; matches vs blueprint, PIMC d=8, tail); run the cascade toward
-  ply 0; iterate harvest/train. Back up pods continuously (`scripts/pod.sh autobackup`): a balance outage lost
-  ~500k labels.
-
+- End of 2026-10-13 (one-day compute push, all pods deleted): milestone M4 measured. Best player = resolve with
+  value net c5-2 (931k labels: exact plies 9-13, cascade plies 4-9), blueprint before ply 8, exact window from ply 9:
+  exploitability from ply 8 0.0077 [0.0057, 0.0097] (blueprint 0.126), 62.9% vs the blueprint. Each label/net round
+  lowered exploitability measurably (paired positions); match scores no longer separate the resolve variants.
+- Next, in order: cascade levels 4-5 down to 0-1 with the fast batched solver and c5-2; search from P0 = 6, 4, ...
+  tested by paired delta_8 and head to head; more exact labels at plies 9-10; a certified bound on exploitability
+  before ply 8 (value-net leaves with their error as slack). Back up pods continuously (`scripts/pod.sh
+  autobackup`); keep `scripts/podqueue.py` feeding idle pods and check for orphaned workers.

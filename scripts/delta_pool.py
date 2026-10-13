@@ -6,7 +6,7 @@ Each FILE is a bbar.delta output (a "run" line, then one "position" line per pos
 Prints, per agent, the pooled mean delta_T with its 95% interval (normal, over positions); for every pair of agents,
 the paired difference over the positions both were measured on (same seed, same deal, same moves before T: agents
 that play the same base network before T reach the same positions). --append writes one "pooled" line per agent
-(its runs' seeds, commits and hosts) to the evidence trail.
+(its runs' seeds, commits and hosts) and one "paired" line per pair of agents to the evidence trail.
 """
 import argparse
 import itertools
@@ -65,6 +65,12 @@ def main():
         d = [pos[names[i]][k] - pos[names[j]][k] for k in common]
         m, lo, hi = ci(d)
         print(f"[{i}] - [{j}] paired on {len(common)} positions: {m:+.4f} [{lo:+.4f}, {hi:+.4f}]")
+        if a.append:
+            line = {"type": "paired", "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "a": names[i], "b": names[j], "T": a.T, "n": len(common),
+                    "a_minus_b": {"mean": m, "ci95": [lo, hi]}}
+            with open(a.append, "a") as out:
+                out.write(json.dumps(line) + "\n")
 
 
 if __name__ == "__main__":
