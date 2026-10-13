@@ -20,9 +20,9 @@ own moves show only public effects (the card drawn afterwards is not shown).
 
 Opponents (--opponent takes a spec or one of these keys; default: the strongest available):
   resolve    the re-solving player (bbar/resolve.py), the project's best:
-             resolve:V=checkpoints/value/v3h/best.pt,base=nn:checkpoints/bp-v1/step_30518.pt,P0=8,F=10,d=2,iters=200,
-             mode=plain, on the CPU (faster than MPS here). On an M4: 5-12 s at its first re-solved move (ply 8 or
-             9), about 0.3 s at ply 10 or 11, instant otherwise. On your turn it precomputes what its next move
+             resolve:V=checkpoints/value/c5-2/best.pt,base=nn:checkpoints/bp-v1/step_30518.pt,P0=8,F=9,d=2,iters=200,
+             mode=plain, on the CPU (faster than MPS here). On an M4: a few seconds at its re-solved moves (ply 8
+             and its first exact-window move, ply 9 or 10; about 9 s per game in all), instant otherwise. On your turn it precomputes what its next move
              needs from the public history alone (ponder_resolve: same moves, shorter waits; --no-ponder)
   blueprint  the blueprint policy network alone, nn:checkpoints/bp-v1/step_30518.pt
   pimc8      pimc:w=128,d=8 (search)
@@ -61,7 +61,8 @@ ROOT = Path(__file__).resolve().parent.parent
 PAGE = Path(__file__).resolve().with_name("play.html")
 PORT = 8765
 BLUEPRINT = "checkpoints/bp-v1/step_30518.pt"
-VALUE = "checkpoints/value/v3h/best.pt"
+VALUE = "checkpoints/value/c5-2/best.pt"
+RESOLVE = "P0=8,F=9,d=2,iters=200,mode=plain"   # the re-solver's settings (README: best player)
 RECORD = "runs/play/games.jsonl"
 FIRST = ("alternate", "you", "ai")
 
@@ -129,10 +130,10 @@ def catalogue():
     if bp and v:
         out.append(Opponent(
             "resolve", "Re-solver (strongest)",
-            f"resolve:V={v},base=nn:{bp},P0=8,F=10,d=2,iters=200,mode=plain",
+            f"resolve:V={v},base=nn:{bp},{RESOLVE}",
             "Blueprint network for the first 8 moves, then solves the rest of the game on the fly with a value "
-            "network and exact endgame solving. Thinks 5-12 s once per game, at move 9 or 10.",
-            short="re-solves as it plays; thinks 5-12 s once per game"))
+            "network and exact endgame solving. Thinks a few seconds at moves 9 and 10 (about 9 s per game).",
+            short="re-solves as it plays; thinks ~9 s per game"))
     else:
         missing["resolve"] = (f"the re-solving player needs {VALUE} and {BLUEPRINT}: "
                               f"{', '.join(p for p, f in ((VALUE, v), (BLUEPRINT, bp)) if not f)} not found")

@@ -390,6 +390,7 @@ def test_pondering_changes_no_move():
     bp, v = find(BLUEPRINT), find(VALUE)
     if bp is None or v is None:
         pytest.skip("checkpoints not available")
+    # F=10: the AI's first exact window (ply 11) is rooted at the human's ply-10 move, so it can be pondered there
     spec = f"resolve:V={v},base=nn:{bp},P0=8,F=10,d=2,iters=20,mode=plain"
     player = match.make_player(spec)
     runs = []
@@ -617,11 +618,11 @@ def test_cli_missing_checkpoints_for_a_catalogue_key(monkeypatch, capsys, tmp_pa
 def test_abandoning_the_resolver_mid_search():
     """The re-solving AI (default settings) abandoned while it re-solves (ply 9): the search stops at once, the new
     game's first AI move (a blueprint move) is not delayed by it, and no 'Loading the AI' is shown."""
-    from bbar.play import VALUE
+    from bbar.play import RESOLVE, VALUE
     bp, v = find(BLUEPRINT), find(VALUE)
     if bp is None or v is None:
         pytest.skip("checkpoints not available")
-    spec = f"resolve:V={v},base=nn:{bp},P0=8,F=10,d=2,iters=200,mode=plain"
+    spec = f"resolve:V={v},base=nn:{bp},{RESOLVE}"
     app = App([Opponent("r", "R", spec, player=match.make_player(spec))], seat="0", seed=2026, record=None)
     try:
         app.new_game(first="you")
