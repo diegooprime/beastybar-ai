@@ -12,7 +12,7 @@ No player is yet strong in the mission's sense (worst case). Two are about equal
 | Player | vs greedy | vs `pimc:w=32,d=6` | vs `pimc:w=128,d=8` | Exploitability (lower bounds) |
 |---|---|---|---|---|
 | `pimc:w=128,d=8` (search) | 96.7 [96.0, 97.3] | 57.4 [55.8, 59.0] | - | not measured |
-| blueprint `bp-v1` final (network) | - | 53.2 [51.9, 54.4] | 48.4 [47.2, 49.6] | exact best response from ply 9: running |
+| blueprint `bp-v1` final (network) | - | 53.2 [51.9, 54.4] | 48.4 [47.2, 49.6] | >= 0.111 [0.104, 0.118] (exact best response from ply 9) |
 | blueprint `bp-v1` step 8000 | 92.9 [92.1, 93.6] | 48.6 [47.3, 49.9] | - | >= 0.127 [0.119, 0.135] from ply 9; >= 0.022 [0.018, 0.026] by a PPO exploiter |
 | `pimc:w=8,d=4` | 90.1 [88.8, 91.2] | 34.4 [32.7, 36.1] | 29.3 [27.7, 30.9] | >= 0.161 [0.157, 0.165] (PPO exploiter) |
 
@@ -25,11 +25,14 @@ What we have learned:
 - **PIMC strength comes from depth** (d=4 -> 6 -> 8), barely from more sampled worlds.
 - **The blueprint is far more exploitable than RL exploiters show.** An exact best response that copies it to ply T and
   then plays perfectly gains (200 self-play positions per T, `bbar.delta`, seed 1001): 0.072 from ply 12, 0.092 from
-  11, 0.110 from 10, 0.127 from 9 (step 8000). A PPO exploiter finds only 0.022. Longer training (final checkpoint)
-  beats step 8000 57.3% [56.2, 58.4] but stays about as exploitable late.
+  11, 0.110 from 10, 0.127 from 9 (step 8000); 0.069 / 0.087 / 0.100 / 0.111 for the final checkpoint, which beats
+  step 8000 57.3% [56.2, 58.4]. A PPO exploiter finds only 0.022: learned exploiters understate the worst case.
 - **The late game can be solved exactly**: exact windows from ply 10 take ~0.4 s, from ply 9 ~1-5 s, from ply 8 ~2 min.
-  Depth-limited solving with exact leaf values is nearly unexploitable (1e-6..2e-4, E2 oracle). The plan is to learn
-  those leaf values (PBS value network) and re-solve every decision (docs/PLAN.md, M4).
+  Depth-limited solving with exact leaf values is nearly unexploitable (1e-6..2e-4, E2 oracle). With a learned PBS
+  value network at the leaves (held-out error 0.068), depth-limited play from ply 10 is 0.020 [0.014, 0.025]
+  exploitable (E2, 48 positions) against the blueprint's 0.100 there. Value-net error falls slowly with data
+  (0.070 / 0.063 / 0.057 at 62k / 139k / 253k public states), so search depth and better features matter too. Next:
+  the re-solving player (docs/PLAN.md, M4) measured end to end.
 
 ## What exists
 
