@@ -23,6 +23,12 @@
   one position or the other): the callback's arguments do, recomputed exactly (also test_leaf_values_avg_weights).
 - (b) A leaf ply where every leaf is a frontier or terminal node: the depth-limited solve is the ordinary solve, bit
   for bit.
+- Batched solving (dl.solve_many through bbar._core.WindowBatch; float32 beliefs and values of the feasible hands
+  with NetValues.session): every window follows exactly the trajectory of the per-window reference loop (ext_begin /
+  ext_end, float64 arrays concatenated around the value function), with a network (any chunking) and with a float64
+  value function (slot layout), plain and gadget windows, windows without value leaves, on any number of threads;
+  WindowBatch's layouts are ext_begin's arrays rearranged, NetValues.session gives __call__'s values, and bad input
+  is refused before any window changes; its arrays are real numpy arrays' memory, never an address an object claims.
 - Consistency: leaf values taken from the full window reproduce its value exactly; embed round-trips profiles.
 - The label generator, the PBS encoding and the network's leaf mapping agree with the solver's conventions.
 - Pipeline bookkeeping: a generator rerun with --force replaces its seed's run whole and logs its own arguments; the
@@ -222,6 +228,215 @@ def test_depth_limited_api_errors(games):
         Window(G, leaf_ply=11)
     with pytest.raises(ValueError):
         Window(G).leaf_values_avg()
+
+
+def dl_jobs(games, seed=0):
+    """Fresh depth-limited jobs of several sizes: plain windows, a gadget re-solve and a window without value
+    leaves (ply 13, leaves at 15: all frontier)."""
+    rng = np.random.default_rng(seed)
+    jobs = []
+    for gi, ply, leaf_ply in ((1, 10, 12), (2, 11, 12), (4, 12, 14), (3, 13, 15), (6, 11, 13)):
+        G = window_check.public_game(games[gi], ply)
+        jobs.append(D.DLJob(Window(G, *ranges_for(G, gi), leaf_ply=leaf_ply)))
+    G = window_check.public_game(games[5], 11)
+    w = Window(G, *ranges_for(G, 5), leaf_ply=13)
+    cfvs = np.zeros(495)
+    cfvs[w.hands(1)] = rng.uniform(0.3, 0.7, len(w.hands(1)))
+    prior = np.zeros(495)
+    prior[w.hands(1)] = rng.uniform(0.5, 1.5, len(w.hands(1)))
+    jobs.append(D.DLJob(w, gadget=(0, cfvs, prior)))
+    assert jobs[3].leaves == 0 and all(j.leaves > 0 for j in jobs if j is not jobs[3])
+    return jobs
+
+
+def solve_state(job):
+    w = job.w
+    avg = w.leaf_values_avg()
+    out = [w.iterations, w.profile_array(), avg, *w.leaf_query()]
+    if job.gadget is not None:
+        out += list(w.gadget_stats(avg).values())
+    return out
+
+
+def synthetic_values(pub, movers, beliefs):
+    """A float64 value function of everything it is given (absolute players)."""
+    v = 0.3 + 20 * beliefs[:, ::-1] + 0.05 * movers[:, None, None] + 0.01 * pub[:, :1, None]
+    return np.clip(v, 0, 1)
+
+
+DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else []) + (
+    ["mps"] if torch.backends.mps.is_available() else [])
+
+
+@pytest.mark.parametrize("kind", ["net", "net-chunk", "synthetic", "exact"] + [f"net-{d}" for d in DEVICES[1:]])
+def test_batched_solves_follow_the_reference_trajectories(games, kind):
+    torch.manual_seed(0)
+    dev = kind[4:] if kind[4:] in DEVICES else "cpu"
+    net = ValueNet(width=32, blocks=1).eval().to(dev)
+    iters = 12
+    values = {"net": NetValues(net), "net-chunk": NetValues(net, chunk=16), "synthetic": synthetic_values,
+              "exact": D.ExactValues(target=1e-5, warm=False)}.get(kind) or NetValues(net, dev, chunk=64)
+    ref = dl_jobs(games)
+    if kind == "exact":     # (slow: the smallest windows)
+        ref = [ref[1], ref[3], ref[4]]
+        iters = 4
+    st_ref = D.solve_many(ref, values, iters, fast=False)
+    want = [solve_state(j) for j in ref]
+    for threads in (1, 3):
+        jobs = dl_jobs(games)
+        if kind == "exact":
+            jobs = [jobs[1], jobs[3], jobs[4]]
+        st = D.solve_many(jobs, values, iters, threads=threads)
+        assert st["calls"] == st_ref["calls"] == 2 * iters and st["leaves"] == st_ref["leaves"]
+        for job, w0 in zip(jobs, want):
+            got = solve_state(job)
+            assert len(got) == len(w0)
+            for a, b in zip(got, w0):
+                assert np.array_equal(a, b), (kind, threads)
+
+
+def test_window_batch_layouts_and_session(games):
+    a, b, c = dl_jobs(games), dl_jobs(games), dl_jobs(games)
+    for js in (a, b, c):
+        D._ext_start(js, "dcfr")
+    want = [j.w.ext_begin()[2] for j in a]               # per window: float64 (leaves, 2, 495), absolute players
+    full = np.concatenate(want)
+    compact = core.WindowBatch([j.w for j in b], threads=2)
+    slots_ = core.WindowBatch([j.w for j in c], layout="slots", relative=False)
+    n = compact.num_leaves
+    assert n == slots_.num_leaves == len(full) and compact.rows()[-1] == n and slots_.width == 495
+    movers = compact.movers()
+    assert np.array_equal(movers, np.concatenate([j.movers for j in a]))
+    buf = np.full((n, 2, compact.width), np.nan, dtype=np.float32)
+    compact.begin(buf)
+    out64 = np.full((n, 2, 495), np.nan)
+    slots_.begin(out64)
+    assert np.array_equal(out64, full)                  # slots layout: ext_begin's arrays, concatenated
+    idx, counts = compact.slots()
+    assert compact.width == counts.max() and idx.shape == buf.shape
+    for row in range(n):
+        for r in range(2):
+            p = r ^ int(movers[row])                    # mover first
+            k = counts[row, r]
+            feas = np.flatnonzero(full[row, p] > 0) if (full[row, p] > 0).sum() == k else None
+            assert list(idx[row, r, :k]) == sorted(idx[row, r, :k])
+            assert np.array_equal(buf[row, r, :k], full[row, p, idx[row, r, :k]].astype(np.float32))
+            assert np.all(buf[row, r, k:] == 0) and np.all(full[row, p, idx[row, r, k:]] == 0)
+            if feas is not None:
+                assert np.array_equal(idx[row, r, :k], feas)
+    # The session's values are __call__'s, at the same slots (mover first), bit for bit.
+    torch.manual_seed(1)
+    nv = NetValues(ValueNet(width=32, blocks=1).eval(), chunk=8)
+    pub = np.concatenate([j.pub for j in a])
+    got = nv.session(pub, idx)(buf)
+    ref = nv(pub, movers, full)
+    for r in range(2):
+        p = r ^ movers
+        assert np.array_equal(got[:, r], np.take_along_axis(ref[np.arange(n), p], idx[:, r], 1).astype(np.float32))
+
+
+def test_window_batch_errors(games):
+    jobs = dl_jobs(games)
+    ws = [j.w for j in jobs]
+    with pytest.raises(ValueError):
+        core.WindowBatch([ws[0], ws[1], ws[0]])         # a window twice
+    with pytest.raises(ValueError):
+        core.WindowBatch(ws, layout="dense")
+    batch = core.WindowBatch(ws)
+    n, wd = batch.num_leaves, batch.width
+    buf = np.zeros((n, 2, wd), dtype=np.float32)
+    with pytest.raises(ValueError):
+        batch.begin(buf)                                # no ext_start
+    D._ext_start(jobs, "dcfr")
+    for bad in (np.zeros((n, 2, wd), dtype=np.int64), np.zeros((n, 2, wd + 1), dtype=np.float32),
+                np.zeros((n, 2, 2 * wd), dtype=np.float32)[:, :, ::2]):
+        with pytest.raises(ValueError):
+            batch.begin(bad)
+    ro = np.zeros((n, 2, wd), dtype=np.float32)
+    ro.flags.writeable = False
+    with pytest.raises(ValueError):
+        batch.begin(ro)
+    with pytest.raises(ValueError):
+        batch.end(buf)                                  # end without begin
+    batch.begin(buf)
+    with pytest.raises(ValueError):
+        batch.begin(buf)                                # begin twice
+    with pytest.raises(ValueError):
+        ws[0].ext_begin()                               # (the window's own calls see the pending half-iteration)
+    with pytest.raises(ValueError):
+        batch.end(buf, buf)                             # values and out overlap
+    _, counts = batch.slots()
+    vals = np.full((n, 2, wd), 0.5, dtype=np.float32)
+    row = int(np.flatnonzero(counts[:, 1] < wd)[0]) if (counts[:, 1] < wd).any() else None
+    if row is not None:
+        vals[row, 1, -1] = np.nan                       # padding is never read
+    last = n - 1
+    vals[last, 0, 0] = np.inf
+    with pytest.raises(ValueError, match="values"):
+        batch.end(vals)
+    assert [w.iterations for w in ws] == [1] * len(ws)  # nothing changed: the half-iteration can still end
+    vals[last, 0, 0] = 0.5
+    out = np.zeros_like(buf)
+    batch.end(vals, out)
+    batch.end(vals.astype(np.float64))                  # float64 values work too
+    assert batch.stats()["ends"] == 2 and batch.stats()["begins"] == 2
+    assert [w.iterations for w in ws] == [1] * len(ws)
+    st = jobs[0].w.ext_begin()                          # the windows carry on alone
+    jobs[0].w.ext_end(np.full(st[2].shape, 0.5))
+    assert jobs[0].w.iterations == 2
+
+
+def fake_arrays(decoy):
+    """(objects that describe `decoy`'s memory without being a numpy array: one with an __array_interface__, one that
+    also claims __class__ numpy.ndarray so that isinstance passes, a memoryview, a list; LyingArray, a real ndarray
+    subclass whose __array_interface__ describes `decoy`)."""
+    class Claims:
+        __array_interface__ = decoy.__array_interface__
+
+    class Spoof(Claims):
+        __class__ = np.ndarray
+
+    class LyingArray(np.ndarray):
+        @property
+        def __array_interface__(self):
+            return decoy.__array_interface__
+    assert isinstance(Spoof(), np.ndarray)
+    return [Claims(), Spoof(), memoryview(decoy), decoy.tolist()], LyingArray
+
+
+def test_window_batch_takes_only_numpy_arrays(games):
+    """begin / end take the memory of real numpy arrays only, as numpy reports it (its own __array_interface__
+    descriptor): an object with a made-up __array_interface__ once made begin write to that address with the GIL
+    released (SIGSEGV at 0x10000). Here the fakes describe a real decoy array, so a regression fails the test instead
+    of crashing it: anything that is not an ndarray is refused before a window changes, and an ndarray subclass
+    lying about its interface is written and read at its own memory."""
+    ref, jobs = dl_jobs(games), dl_jobs(games)
+    for js in (ref, jobs):
+        D._ext_start(js, "dcfr")
+    rb, batch = core.WindowBatch([j.w for j in ref]), core.WindowBatch([j.w for j in jobs])
+    shape = (batch.num_leaves, 2, batch.width)
+    decoy = np.full(shape, np.nan, dtype=np.float32)
+    fakes, LyingArray = fake_arrays(decoy)
+    for bad in fakes:
+        with pytest.raises(ValueError, match="not a numpy array"):
+            batch.begin(bad)
+    assert np.isnan(decoy).all()
+    want = np.zeros(shape, dtype=np.float32)
+    rb.begin(want)
+    lie = np.full(shape, np.nan, dtype=np.float32).view(LyingArray)
+    batch.begin(lie)
+    assert np.isnan(decoy).all() and np.array_equal(np.asarray(lie), want)
+    vals = np.full(shape, 0.5, dtype=np.float32)
+    its = [j.w.iterations for j in jobs]
+    for bad in fakes:
+        with pytest.raises(ValueError, match="not a numpy array"):
+            batch.end(bad)
+        with pytest.raises(ValueError, match="not a numpy array"):
+            batch.end(vals, bad)
+    assert [j.w.iterations for j in jobs] == its and np.isnan(decoy).all()
+    rb.end(vals, want)
+    batch.end(vals.view(LyingArray), lie)               # values read from vals (the decoy is all NaN), out to lie
+    assert np.isnan(decoy).all() and np.array_equal(np.asarray(lie), want)
 
 
 def test_pbs_encoding_matches_the_solver(games):

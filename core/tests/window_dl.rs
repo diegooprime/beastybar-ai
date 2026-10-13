@@ -7,6 +7,8 @@
 //! - `embed` moves profiles between a full window, its trunk and its leaf subtrees losslessly.
 //! - Averaged leaf values: constant leaf values average to themselves; changing ones average with the weights of the
 //!   average strategy (iteration weight x the other player's reach mass).
+//! - The incremental caches of `ext_begin` (current strategy, leaf reaches and beliefs updated only for the player of
+//!   the last half-iteration) give the from-scratch numbers bit for bit, with and without the gadget, every algorithm.
 
 use bbcore::hands::Variant;
 use bbcore::window::{Algo, Cfr, Child, LeafQuery, Leaves, Window};
@@ -358,6 +360,55 @@ fn node_cfvs_are_the_subtree_cfvs_at_the_reach_there() {
                     assert!(f.iter().zip(&nf).all(|(x, y)| (x - y).abs() < 1e-12));
                     assert!((mass - ro_n.iter().sum::<f64>()).abs() < 1e-12);
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn incremental_leaf_queries_are_the_from_scratch_ones() {
+    let bits = |x: &[f64]| x.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    let mut rng = Rng::new(21);
+    for (ply, cut) in [(10, 2), (11, 1), (11, 2)] {
+        let s = random_position(&mut rng, ply);
+        let dl = Window::build_cut(&s, 4, Leaves::Frontier, Some(cut), 1).unwrap();
+        assert!(!dl.value_leaves.is_empty());
+        let ranges = random_ranges(&dl, &mut rng);
+        for algo in [Algo::Dcfr, Algo::PcfrPlus, Algo::CfrPlus] {
+            for gadget in [None, Some(0), Some(1)] {
+                let make = || match gadget {
+                    None => Cfr::new(&dl, ranges.clone(), algo),
+                    Some(player) => {
+                        let o = 1 - player;
+                        let prof = hashed_profile(&dl, 5);
+                        let vals = vec![0.5; dl.n_leaf_values];
+                        let (cfvs, _) = dl.root_cfvs_ext(o, &prof, &ranges[player], false, &vals, 1);
+                        let t: f64 = ranges[player].iter().sum();
+                        let ours = ranges[player].iter().map(|x| x / t).collect();
+                        Cfr::new_gadget(&dl, player, ours, cfvs, None, algo)
+                    }
+                };
+                let (mut a, mut b) = (make(), make());
+                b.ext_fresh = true;
+                for half in 0..40 {
+                    if half == 17 {
+                        a.ext_release(); // (caches dropped between half-iterations: recomputed, same numbers)
+                    }
+                    // Independently: the current strategy and the leaf reaches it induces.
+                    let want = LeafQuery::from_reaches(&dl, &dl.leaf_reaches(&a.current(&dl), &a.root_reaches(false)));
+                    let qa = a.ext_begin(&dl).clone();
+                    let qb = b.ext_begin(&dl).clone();
+                    for q in [&qa, &qb] {
+                        assert_eq!(bits(&q.beliefs), bits(&want.beliefs), "{algo:?} {gadget:?}");
+                        assert_eq!(q.mass, want.mass);
+                    }
+                    let vals: Vec<f64> = (0..dl.n_leaf_values).map(|_| rng.below(1001) as f64 / 1000.0).collect();
+                    a.ext_end(&dl, vals.clone()).unwrap();
+                    b.ext_end(&dl, vals).unwrap();
+                }
+                assert_eq!(bits(&a.average(&dl)), bits(&b.average(&dl)));
+                assert_eq!(bits(&a.avg_leaf_values(&dl)), bits(&b.avg_leaf_values(&dl)));
+                assert_eq!(bits(&a.current(&dl)), bits(&b.current(&dl)));
             }
         }
     }
