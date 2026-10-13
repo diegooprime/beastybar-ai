@@ -5,12 +5,20 @@
 //! With the `pyo3` feature (enabled by maturin) the crate is the Python module `bbar._core`.
 
 pub mod action;
+pub mod agents;
 pub mod animal;
+pub mod arena;
+pub mod eval;
 pub mod rng;
+pub mod search;
 mod state;
+pub mod view;
 
 #[cfg(feature = "pyo3")]
 mod python;
+
+/// Fingerprint of the sources this crate was compiled from (core/build.rs; bbar/provenance.py checks it).
+pub const BUILD_ID: &str = env!("BBAR_BUILD_ID");
 
 pub use action::{ActionSet, Move, NUM_ACTIONS, decode, encode};
 pub use rng::Rng;

@@ -3,7 +3,8 @@
 #
 #   scripts/pod.sh up NAME [GPU_ID]      create a pod (tries community, then secure), wait for ssh, print its id
 #   scripts/pod.sh setup ID              sync the repo, install rust, build the engine, check golden
-#   scripts/pod.sh sync ID               rsync the repo to /workspace/beastybar-ai (no .git, .venv, target, runs)
+#   scripts/pod.sh sync ID               rsync the repo to /workspace/beastybar-ai (no .git, .venv, target, runs),
+#                                        write its provenance to REVISION there, rebuild the engine if needed
 #   scripts/pod.sh ssh ID [CMD...]       run a command in the repo dir (interactive shell without CMD)
 #   scripts/pod.sh bg ID NAME CMD...     run CMD detached; log at runs/NAME.log on the pod
 #   scripts/pod.sh pull ID PATH          rsync PATH (relative to repo) back from the pod
@@ -66,7 +67,13 @@ except Exception: pass' 2>/dev/null || true)
     rsync -az --delete -e "ssh ${SSH_OPTS[*]} -p $port" \
       --exclude .git --exclude .venv --exclude target --exclude runs --exclude '__pycache__' \
       --exclude '*.so' --exclude checkpoints \
-      "$REPO/" "$host:$REMOTE/" ;;
+      "$REPO/" "$host:$REMOTE/"
+    # The pod has no .git: record the commit and code hash (bbar/provenance.py) for the results log.
+    py="$REPO/.venv/bin/python"; [ -x "$py" ] || py=python3
+    (cd "$REPO" && "$py" -m bbar.provenance) | rsh "$id" "cat > $REMOTE/REVISION"
+    # Never leave an extension built from older sources next to new ones (bbar.arena would refuse to log anyway).
+    rsh "$id" "bash -lc 'source ~/.cargo/env 2>/dev/null; cd $REMOTE
+      if command -v maturin >/dev/null; then PYTHON=python scripts/build_core.sh; else echo \"no toolchain yet: run setup\"; fi'" ;;
   setup)
     id=$1
     "$0" sync "$id"
@@ -76,8 +83,7 @@ except Exception: pass' 2>/dev/null || true)
       source ~/.cargo/env
       cd $REMOTE
       pip install -q maturin numpy pytest 2>&1 | tail -1
-      maturin build --release -q -o target/wheels 2>&1 | tail -2
-      pip install -q --force-reinstall --no-deps target/wheels/*.whl
+      PYTHON=python scripts/build_core.sh
       python -m bbar.golden --engine core'" ;;
   ssh)
     id=$1; shift
@@ -97,5 +103,5 @@ except Exception: pass' 2>/dev/null || true)
   down)
     runpodctl pod delete "$1" ;;
   *)
-    sed -n '2,12p' "$0"; exit 1 ;;
+    sed -n '2,11p' "$0"; exit 1 ;;
 esac

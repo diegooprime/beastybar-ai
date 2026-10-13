@@ -18,3 +18,12 @@ checkpoints/
 
 # rust
 target/
+
+# experiment outputs; runs/results.jsonl is the evidence trail and is committed
+runs/*
+!runs/results.jsonl
+# commit id written on pods by scripts/pod.sh sync
+REVISION
+
+# parallel work trees
+.worktrees/
