@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+.cache/
+.pytest_cache/
+.DS_Store
+*.egg-info/
+build/
+*.so
+*.dylib
+.env
+.env.*
+
+# model weights and checkpoints
+*.pt
+*.pth
+checkpoints/
