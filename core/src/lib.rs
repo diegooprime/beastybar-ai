@@ -6,11 +6,15 @@
 
 pub mod action;
 pub mod animal;
+pub mod env;
+pub mod features;
 pub mod rng;
 mod state;
 
 #[cfg(feature = "pyo3")]
 mod python;
+#[cfg(feature = "pyo3")]
+mod python_env;
 
 pub use action::{ActionSet, Move, NUM_ACTIONS, decode, encode};
 pub use rng::Rng;

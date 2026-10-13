@@ -185,4 +185,10 @@ fn bench(py: Python<'_>, n_games: u64, seed: u64) -> (u64, u64, f64) {
 mod _core {
     #[pymodule_export]
     use super::{Game, bench};
+
+    /// Training bindings (VecEnv, observation layout): `python_env.rs`.
+    #[pymodule_init]
+    fn init(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
+        crate::python_env::register(m)
+    }
 }
