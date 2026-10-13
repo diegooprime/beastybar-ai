@@ -14,6 +14,8 @@
 #   scripts/pod.sh backup ID             pull data/, checkpoints/ and runs/ into backups/<pod id>/ (no deletes): pods
 #                                        can vanish (e.g. when the account balance runs out), so back up often
 #   scripts/pod.sh autobackup ID [MIN]   backup every MIN minutes (default 10) until the pod is gone
+#   scripts/pod.sh guard [USD]           every 5 min: if the account balance < USD (default 2.5), back up and delete
+#                                        every pod (RunPod terminates pods, losing their disks, once it is negative)
 #   scripts/pod.sh push ID PATH          rsync PATH (relative to repo) to the pod (e.g. a checkpoint: sync skips them)
 #   scripts/pod.sh down ID               delete the pod
 set -euo pipefail
@@ -130,6 +132,19 @@ except Exception: pass' 2>/dev/null || true)
     id=$1; every=${2:-10}
     while target "$id" >/dev/null; do "$0" backup "$id" >/dev/null 2>&1 || true; sleep $((60 * every)); done
     echo "pod $id is gone; last backup in backups/$id" ;;
+  guard)
+    floor=${1:-2.5}
+    while true; do
+      bal=$(runpodctl user 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["clientBalance"])' 2>/dev/null || echo 999)
+      if python3 -c "import sys; sys.exit(0 if float('$bal') < float('$floor') else 1)"; then
+        echo "$(date -u +%FT%TZ) balance $bal < $floor: backing up and deleting all pods"
+        for id in $(runpodctl pod list 2>/dev/null | python3 -c 'import json,sys; print(" ".join(p["id"] for p in json.load(sys.stdin)))'); do
+          "$0" backup "$id" || true; runpodctl pod delete "$id" || true
+        done
+        exit 0
+      fi
+      sleep 300
+    done ;;
   down)
     runpodctl pod delete "$1" ;;
   *)
