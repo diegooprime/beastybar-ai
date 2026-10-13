@@ -59,3 +59,8 @@ labels (x9, ~12k) are gathered on the hub. scripts/gather.sh HUB DIR -- PODS col
 - RunPod API lookups get rate-limited with many concurrent pod.sh calls: targets are now cached.
 - Two community 2xL40S hosts had unusable CUDA (driver 550 / broken devices): use SECURE; setup now checks CUDA.
 - Generators keep labels in memory until a shard fills: use small --shard-size so work survives restarts.
+- Cascade label runs can leave their multiprocessing workers behind (parent pid 1, spinning on CPU): after a run
+  ends, `ps -eo pid,ppid,args | grep '[s]pawn_main' | awk '$2==1'` must be empty (they halved five pods' speed).
+- Matches only log at the end: run them with small --batch and stop them with SIGTERM (`pkill -TERM -o -f
+  'python -m [b]bar.match'`) to log the finished batches (`stopped_early`).
+- scripts/podqueue.py starts queued jobs on pods as they go idle; scripts/delta_pool.py pools delta runs.
