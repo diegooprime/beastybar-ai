@@ -6,15 +6,27 @@
 //! the seed and the starting seat is balanced. [`VecEnv::reset_deals`] installs given deals (duplicate-deal
 //! evaluation) without touching the RNG streams.
 //!
+//! Every game also carries one agent RNG per seat, for built-in agents acting inside the env (`crate::env_act`) and
+//! for the sampling draws of network agents: an agent in seat s builds its views and acts with seat s's RNG, exactly
+//! as in the arena. Seeds come from the keyed, non-invertible [`derive_seed`] (SipHash): for env `i`'s `k`-th
+//! own-stream game, `derive_seed(seed, [SEAT_STREAM, i, k, s])`; [`VecEnv::reset_arena`] uses the arena's own seat
+//! RNGs instead ([`crate::arena::seat_rng`]), so a match played in the env replays the arena move for move. As in
+//! the arena, whoever knows the seed can recompute the deals: built-in agents never look (trust model, agents.rs).
+//!
 //! Episodes end where [`episode_end`] says so. Today that is game over, with the house-rule result; the planned
 //! exact-solver integration ends them earlier, at the perfect-information frontier, with the solver's exact value.
 
 use std::thread;
 
 use crate::action::NUM_ACTIONS;
+use crate::arena::{self, derive_seed};
 use crate::features::{History, OBS_DIM, PRIV_DIM, encode_mask, encode_obs_zeroed, encode_privileged, ply};
 use crate::rng::Rng;
 use crate::state::State;
+
+/// `derive_seed` path tags of the seat RNGs (distinct from the arena's DEAL = 1 and GAME = 2).
+const SEAT_STREAM: u64 = 3;
+const SEAT_RESET: u64 = 4;
 
 /// How an episode ended, from player 0's side.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,6 +71,15 @@ struct Slot {
     games: u64,
     /// Final scores of the last episode that ended in this slot.
     last_scores: [u8; 2],
+    /// The agent RNG of each seat in the current game.
+    seat_rngs: [Rng; 2],
+}
+
+/// What an agent seated in an env acts on: the position, its public history, and the seats' agent RNGs.
+pub(crate) struct AgentSlot<'a> {
+    pub state: &'a State,
+    pub hist: &'a History,
+    pub seat_rngs: &'a mut [Rng; 2],
 }
 
 /// Independent per-env seed: a SplitMix64 finalizer over `(seed, i)`.
@@ -69,6 +90,11 @@ fn stream_seed(seed: u64, i: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Seat RNGs keyed by `key` at `path` + seat.
+fn seat_rngs(key: u64, path: [u64; 3]) -> [Rng; 2] {
+    std::array::from_fn(|s| Rng::new(derive_seed(key, &[path[0], path[1], path[2], s as u64])))
+}
+
 impl Slot {
     fn new(seed: u64, i: usize) -> Slot {
         let mut slot = Slot {
@@ -77,15 +103,17 @@ impl Slot {
             rng: Rng::new(stream_seed(seed, i as u64)),
             games: 0,
             last_scores: [0; 2],
+            seat_rngs: [Rng::new(0), Rng::new(0)],
         };
-        slot.next_game(i);
+        slot.next_game(seed, i);
         slot
     }
 
-    fn next_game(&mut self, i: usize) {
+    fn next_game(&mut self, seed: u64, i: usize) {
         let start = ((i as u64 + self.games) % 2) as u8;
         self.state = State::deal(&mut self.rng, start);
         self.hist.clear();
+        self.seat_rngs = seat_rngs(seed, [SEAT_STREAM, i as u64, self.games]);
         self.games += 1;
     }
 }
@@ -96,6 +124,8 @@ const MIN_CHUNK: usize = 128;
 pub struct VecEnv {
     slots: Vec<Slot>,
     threads: usize,
+    /// The seed: the key of the seat RNGs.
+    seed: u64,
 }
 
 impl VecEnv {
@@ -103,7 +133,13 @@ impl VecEnv {
     pub fn new(n: usize, seed: u64, threads: usize) -> VecEnv {
         assert!(n > 0, "need at least one env");
         let threads = if threads == 0 { thread::available_parallelism().map_or(1, |t| t.get()) } else { threads };
-        VecEnv { slots: (0..n).map(|i| Slot::new(seed, i)).collect(), threads }
+        VecEnv { slots: (0..n).map(|i| Slot::new(seed, i)).collect(), threads, seed }
+    }
+
+    /// Worker threads for encoding and for built-in agents.
+    #[inline]
+    pub fn threads(&self) -> usize {
+        self.threads
     }
 
     #[inline]
@@ -213,24 +249,46 @@ impl VecEnv {
                 result[i] = end.p0_score;
                 margin[i] = end.margin as i64;
                 slot.last_scores = end.scores;
-                slot.next_game(i);
+                slot.next_game(self.seed, i);
             }
         }
         Ok(())
     }
 
     /// Env `i` restarts from `State::deal(&mut Rng::new(seeds[i]), starts[i])` (the deal of `Game.random(seed,
-    /// start)`). The envs' own deal streams are untouched.
+    /// start)`). The envs' own deal streams are untouched. The seat RNGs restart from
+    /// `derive_seed(env seed, [SEAT_RESET, i, seeds[i], s])` (the same deal in the same env plays the same way).
     pub fn reset_deals(&mut self, seeds: &[u64], starts: &[u8]) {
         assert!(seeds.len() == self.len() && starts.len() == self.len());
-        for ((slot, &seed), &start) in self.slots.iter_mut().zip(seeds).zip(starts) {
+        for (i, ((slot, &seed), &start)) in self.slots.iter_mut().zip(seeds).zip(starts).enumerate() {
             assert!(start < 2, "start must be 0 or 1");
             slot.state = State::deal(&mut Rng::new(seed), start);
             slot.hist.clear();
+            slot.seat_rngs = seat_rngs(self.seed, [SEAT_RESET, i as u64, seed]);
         }
     }
 
-    /// Puts env `i` at a given position with its public history (`hist.len()` must equal its ply).
+    /// Env `j` restarts from game `games[j]` of deal `deals[j]` of an arena match with `seed`
+    /// (`core/src/arena.rs`): the deal `arena::deal(seed, deals[j])`, and the seat RNGs the arena gives that game
+    /// ([`arena::seat_rng`]). In game 0, agent A sits in seat 0; in game 1, in seat 1. The envs' own deal streams
+    /// are untouched.
+    pub fn reset_arena(&mut self, seed: u64, deals: &[u32], games: &[u8]) {
+        assert!(deals.len() == self.len() && games.len() == self.len());
+        for ((slot, &i), &g) in self.slots.iter_mut().zip(deals).zip(games) {
+            assert!(g < 2, "game must be 0 or 1");
+            slot.state = arena::deal(seed, i);
+            slot.hist.clear();
+            slot.seat_rngs = std::array::from_fn(|s| arena::seat_rng(seed, i, g, s as u8));
+        }
+    }
+
+    /// Every env's position, history and seat RNGs, for agents acting in the env (`crate::env_act`).
+    pub(crate) fn agent_slots(&mut self) -> impl Iterator<Item = AgentSlot<'_>> {
+        self.slots.iter_mut().map(|s| AgentSlot { state: &s.state, hist: &s.hist, seat_rngs: &mut s.seat_rngs })
+    }
+
+    /// Puts env `i` at a given position with its public history (`hist.len()` must equal its ply). The seat RNGs
+    /// continue their streams.
     pub fn set(&mut self, i: usize, state: State, hist: History) {
         assert_eq!(ply(&state), hist.len(), "history length must equal the ply");
         assert!(episode_end(&state).is_none(), "the position must have a player to move");

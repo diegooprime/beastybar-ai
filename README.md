@@ -20,6 +20,13 @@ This file is the project's state: what exists, how to run it, the current best p
   are only for agents that keep the trust model. Every match appends a line to `runs/results.jsonl`, the evidence
   trail: score with its 95% interval over deal pairs (Wilson), commit, code hash, engine build, host, command
   (`bbar/provenance.py`). It refuses a stale engine build, and uncommitted code unless `--allow-dirty`.
+- **Any agent against any other** (`bbar/match.py`): built-in specs and network checkpoints (`nn:PATH` samples the
+  policy, `nn:PATH,argmax` plays its argmax) in the arena's duplicate deals, with the same evidence trail plus the
+  SHA-256 of every checkpoint. Built-in agents act inside the batched env (`VecEnv.act`, `core/src/env_act.rs`) with the
+  arena's views and seat RNGs: two built-in agents replay `bbar.arena` move for move.
+- **Exploiter** (`bbar/rl/exploit.py`; pods: `scripts/exploit.sh`): PPO best response to a frozen target (built-in spec
+  or checkpoint), optionally started from a policy (`--init`). Its final match score - 0.5, logged with its interval,
+  is a lower bound on the target's exploitability.
 
 ## Run
 
@@ -27,6 +34,8 @@ This file is the project's state: what exists, how to run it, the current best p
     .venv/bin/python -m bbar.golden --engine core                 # rules check: 2000/2000 exact
     .venv/bin/python -m pytest -q && (cd core && cargo test --release)
     .venv/bin/python -m bbar.arena A B --deals N [--seed S]       # or: --ladder SPEC1 SPEC2 ...
+    .venv/bin/python -m bbar.match A B --deals N [--device D]     # A, B: a spec or nn:PATH[,argmax]
+    .venv/bin/python -m bbar.rl.exploit --name NAME --target T [--init PATH]   # exploiter (pods: scripts/exploit.sh)
     .venv/bin/python -m bbar.provenance                           # commit and code hash of this tree
     (cd core && cargo run --release --example bench_search)       # search speed
 

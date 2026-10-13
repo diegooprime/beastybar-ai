@@ -8,6 +8,7 @@
 #   scripts/pod.sh ssh ID [CMD...]       run a command in the repo dir (interactive shell without CMD)
 #   scripts/pod.sh bg ID NAME CMD...     run CMD detached; log at runs/NAME.log on the pod
 #   scripts/pod.sh pull ID PATH          rsync PATH (relative to repo) back from the pod
+#   scripts/pod.sh push ID PATH          rsync PATH (relative to repo) to the pod (e.g. a checkpoint: sync skips them)
 #   scripts/pod.sh down ID               delete the pod
 set -euo pipefail
 
@@ -100,8 +101,13 @@ except Exception: pass' 2>/dev/null || true)
     read -r host port < <(target "$id")
     mkdir -p "$REPO/$(dirname "$path")"
     rsync -az -e "ssh ${SSH_OPTS[*]} -p $port" "$host:$REMOTE/$path" "$REPO/$(dirname "$path")/" ;;
+  push)
+    id=$1; path=$2
+    read -r host port < <(target "$id")
+    rsh "$id" "mkdir -p $REMOTE/$(dirname "$path")"
+    rsync -az -e "ssh ${SSH_OPTS[*]} -p $port" "$REPO/$path" "$host:$REMOTE/$(dirname "$path")/" ;;
   down)
     runpodctl pod delete "$1" ;;
   *)
-    sed -n '2,11p' "$0"; exit 1 ;;
+    sed -n '2,12p' "$0"; exit 1 ;;
 esac

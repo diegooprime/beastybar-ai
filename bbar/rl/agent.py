@@ -17,11 +17,16 @@ from bbar.rl.net import OPP_HAND_PUBLIC, OPP_UNPLAYED, PolicyNet, masked_logits,
 HAND_SIZE = 4   # cards in a hand while the deck lasts; after that, the hand is public
 
 
+def check_layout(ck, name):
+    """Raises ValueError unless checkpoint `ck` was trained on this engine's observation layout."""
+    if ck.get("obs_version") != OBS_VERSION or ck.get("obs_dim") != OBS_DIM:
+        raise ValueError(f"{name}: observation layout v{ck.get('obs_version')} ({ck.get('obs_dim')} floats), "
+                         f"engine has v{OBS_VERSION} ({OBS_DIM})")
+
+
 def load_checkpoint(path, device="cpu"):
     ck = torch.load(path, map_location=device, weights_only=True)
-    if ck.get("obs_version") != OBS_VERSION or ck.get("obs_dim") != OBS_DIM:
-        raise ValueError(f"{path}: observation layout v{ck.get('obs_version')} ({ck.get('obs_dim')} floats), "
-                         f"engine has v{OBS_VERSION} ({OBS_DIM})")
+    check_layout(ck, path)
     return ck
 
 

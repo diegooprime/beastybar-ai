@@ -1,14 +1,23 @@
 //! Python bindings for training: `bbar._core.VecEnv`, the observation layout, `encode_moves` and `env_bench`.
-//! Registered from the module init in `python.rs`.
+//! Registered from the module init in `python.rs`. Built-in agents acting in a VecEnv (`VecEnv.act`,
+//! `VecEnv.uniforms`, `VecEnv.reset_arena`): `core/src/env_act.rs`.
 //!
 //! Arrays come back as numpy arrays over fresh `bytearray`s that Rust fills in place with the GIL released (no
 //! copy after encoding). Array arguments are anything `numpy.ascontiguousarray` accepts.
 
-use pyo3::exceptions::PyValueError;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::Duration;
+
+use pyo3::exceptions::{PyKeyboardInterrupt, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict};
 
 use crate::action::NUM_ACTIONS;
+use crate::agents::Spec;
+use crate::env_act::AgentPool;
 use crate::animal::{NUM_ANIMALS, animal_id};
 use crate::env::{self, VecEnv};
 use crate::features::{
@@ -99,6 +108,21 @@ fn u64s(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u64>> {
 #[pyclass(module = "bbar._core", name = "VecEnv")]
 pub struct PyVecEnv {
     env: VecEnv,
+    /// Built-in agents by canonical spec, one per thread, kept across `act` calls.
+    pools: Mutex<HashMap<String, AgentPool>>,
+}
+
+/// Env indices from an integer array-like, each in `0..n`.
+fn env_indices(obj: &Bound<'_, PyAny>, n: usize) -> PyResult<Vec<usize>> {
+    i64s(obj)?
+        .into_iter()
+        .map(|i| {
+            usize::try_from(i)
+                .ok()
+                .filter(|&i| i < n)
+                .ok_or_else(|| PyValueError::new_err(format!("env index {i} out of range ({n} envs)")))
+        })
+        .collect()
 }
 
 #[pymethods]
@@ -109,7 +133,7 @@ impl PyVecEnv {
         if n_envs == 0 {
             return Err(PyValueError::new_err("n_envs must be positive"));
         }
-        Ok(PyVecEnv { env: VecEnv::new(n_envs, seed, threads) })
+        Ok(PyVecEnv { env: VecEnv::new(n_envs, seed, threads), pools: Mutex::new(HashMap::new()) })
     }
 
     #[getter]
@@ -248,6 +272,97 @@ impl PyVecEnv {
             o[1] = s[1] as i64;
         }
         ndarray(&buf, "int64", &[n, 2])
+    }
+
+    /// `(mover int64 [n], ply int64 [n])`: the player to move in each env and the moves played so far (cheap: no
+    /// observation is encoded).
+    fn movers<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let n = self.env.len();
+        let (mover, plies) = (zeroed::<i64>(py, n)?, zeroed::<i64>(py, n)?);
+        {
+            let (mv, pl) = unsafe { (slice_mut::<i64>(&mover)?, slice_mut::<i64>(&plies)?) };
+            for i in 0..n {
+                let s = self.env.state(i);
+                mv[i] = s.to_move as i64;
+                pl[i] = features::ply(s) as i64;
+            }
+        }
+        let out = (ndarray(&mover, "int64", &[n])?, ndarray(&plies, "int64", &[n])?);
+        Ok(out.into_pyobject(py)?.into_any())
+    }
+
+    /// int64 [k]: the action of the built-in agent `spec` (core/src/agents.rs) for the player to move in each env of
+    /// `envs` (k distinct indices), exactly as in the arena: it sees `view()` of the position (oracle specs: the true
+    /// state) and the move history, and acts with that seat's agent RNG in the env (core/src/env_act.rs). Nothing is
+    /// played: pass the actions to `step`. Runs on the env's threads without holding the GIL; Ctrl-C abandons even a
+    /// long search (KeyboardInterrupt; the seat RNGs of those envs have then advanced by an unspecified amount).
+    fn act<'py>(&mut self, py: Python<'py>, spec: &str, envs: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let spec = Spec::parse(spec).map_err(PyValueError::new_err)?;
+        let envs = env_indices(envs, self.env.len())?;
+        let threads = self.env.threads();
+        let mut pools = self.pools.lock().map_err(|_| PyValueError::new_err("agent pool poisoned"))?;
+        let pool = pools.entry(spec.to_string()).or_insert_with(|| AgentPool::new(spec, threads));
+        let stop = pool.stop_flag().clone();
+        let env = &mut self.env;
+        let k = envs.len();
+        let (result, interrupted) = py.detach(|| {
+            std::thread::scope(|scope| {
+                let (done_tx, done_rx) = mpsc::channel::<()>();
+                let worker = scope.spawn(move || {
+                    let mut out = vec![0u8; k];
+                    let r = env.act(pool, &envs, &mut out).map(|()| out);
+                    let _ = done_tx.send(());
+                    r
+                });
+                let mut interrupted = false;
+                while let Err(RecvTimeoutError::Timeout) = done_rx.recv_timeout(Duration::from_millis(20)) {
+                    if !interrupted && Python::attach(|py| py.check_signals()).is_err() {
+                        interrupted = true;
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                }
+                (worker.join().expect("agent threads panicked"), interrupted)
+            })
+        });
+        if interrupted {
+            return Err(PyKeyboardInterrupt::new_err("agents interrupted"));
+        }
+        let out = result.map_err(PyValueError::new_err)?;
+        let buf = zeroed::<i64>(py, k)?;
+        for (o, a) in unsafe { slice_mut::<i64>(&buf)? }.iter_mut().zip(out) {
+            *o = a as i64;
+        }
+        ndarray(&buf, "int64", &[k])
+    }
+
+    /// float64 [k]: one uniform draw in [0, 1) from the agent RNG of the player to move in each env of `envs`: the
+    /// sampling randomness of a network agent in that seat (bbar/match.py samples by inverse CDF).
+    fn uniforms<'py>(&mut self, py: Python<'py>, envs: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let envs = env_indices(envs, self.env.len())?;
+        let buf = zeroed::<f64>(py, envs.len())?;
+        self.env.uniforms(&envs, unsafe { slice_mut::<f64>(&buf)? }).map_err(PyValueError::new_err)?;
+        ndarray(&buf, "float64", &[envs.len()])
+    }
+
+    /// Env `j` restarts from game `games[j]` (0: agent A in seat 0; 1: seats swapped) of deal `deals[j]` of an arena
+    /// match with `seed` (bbar.arena / `play_match`): the same deal, starting seat and seat RNGs, so agents playing
+    /// it here make the arena's decisions. Auto-reset deals are unaffected.
+    fn reset_arena(&mut self, seed: u64, deals: &Bound<'_, PyAny>, games: &Bound<'_, PyAny>) -> PyResult<()> {
+        let (deals, games) = (i64s(deals)?, i64s(games)?);
+        let n = self.env.len();
+        if deals.len() != n || games.len() != n {
+            return Err(PyValueError::new_err(format!("expected {n} deals and {n} games")));
+        }
+        if games.iter().any(|&g| g != 0 && g != 1) {
+            return Err(PyValueError::new_err("games must be 0 or 1"));
+        }
+        let deals = deals
+            .into_iter()
+            .map(|d| u32::try_from(d).map_err(|_| PyValueError::new_err(format!("deal index {d} out of range"))))
+            .collect::<PyResult<Vec<u32>>>()?;
+        let games: Vec<u8> = games.into_iter().map(|g| g as u8).collect();
+        self.env.reset_arena(seed, &deals, &games);
+        Ok(())
     }
 
     /// Public move history of env `i`'s current game: `[(player, action), ...]`, oldest first.
