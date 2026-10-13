@@ -27,7 +27,17 @@ REMOTE=/workspace/beastybar-ai
 SSH_OPTS=(-i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
           -o ServerAliveInterval=30 -o ConnectTimeout=15)
 
-target() {  # prints "user@host port"
+target() {  # prints "user@host port" (cached per pod: every lookup is a RunPod API call, and they get rate-limited)
+  local cache="${TMPDIR:-/tmp}/bbar-pod-targets/$1"
+  if [ -s "$cache" ]; then cat "$cache"; return 0; fi
+  mkdir -p "$(dirname "$cache")"
+  local t
+  t=$(_target_lookup "$1") || return 1
+  [ -n "$t" ] || return 1
+  echo "$t" > "$cache"; echo "$t"
+}
+
+_target_lookup() {
   runpodctl ssh info "$1" 2>/dev/null | python3 -c '
 import json, re, sys
 d = json.load(sys.stdin)
