@@ -4,315 +4,304 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Beasty Bar</title>
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Crect width='10' height='14' rx='2' fill='%2338e0a4'/%3E%3C/svg%3E">
+<!-- Geist when the network has it; the page never waits for it and is laid out for the system fonts too. -->
+<link rel="stylesheet" media="print" onload="this.media='all'"
+  href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap">
 <style>
+/* Near-black instrument; the only two colours are the two players (the AI violet, you mint). */
 :root {
-  --bg: #16181f;
-  --panel: #1f222b;
-  --panel2: #262a35;
-  --line: #343949;
-  --text: #e9e6df;
-  --muted: #9a9fae;
-  --you: #2bb3a3;
-  --you-soft: rgba(43, 179, 163, .16);
-  --ai: #ef7a45;
-  --ai-soft: rgba(239, 122, 69, .16);
-  --gold: #f2c14e;
-  --card: #fbf6ea;
-  --card-ink: #2a2620;
-  --danger: #e5534b;
-  --radius: 12px;
-  --hdr: 56px;
+  --bg: #0a0a0c;
+  --panel: #111115;
+  --raise: #17171c;
+  --line: rgba(255, 255, 255, .085);
+  --line2: rgba(255, 255, 255, .16);
+  --text: #ededf2;
+  --soft: #b4b4be;
+  --muted: #80808c;
+  --faint: #4c4c56;
+  --ai: #9d8cff;
+  --you: #38e0a4;
+  --ink: #0b0b10;
+  --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --out: cubic-bezier(.2, .8, .2, 1);
+  --hdr: 52px;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--text);
-  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-button { font: inherit; color: inherit; cursor: pointer; }
+html { background: var(--bg); color: var(--text); -webkit-text-size-adjust: 100%; }
+body { margin: 0; font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 button:disabled { cursor: default; opacity: .45; }
-select { font: inherit; }
-:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+select { font: 500 12px var(--sans); color: var(--text); background: var(--panel); border: 0; border-radius: 8px;
+  height: 30px; padding: 0 8px; box-shadow: 0 0 0 1px var(--line) inset; max-width: 230px; }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; border-radius: 4px; }
+.ai { --c: var(--ai); }
+.you { --c: var(--you); }
+.meta { color: var(--muted); font-size: 12.5px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
 /* ---- header ---- */
-header { display: flex; align-items: center; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--line);
-  background: var(--panel); flex-wrap: wrap; position: sticky; top: 0; z-index: 5; min-height: var(--hdr); }
-header h1 { font-size: 19px; margin: 0 10px 0 0; letter-spacing: .3px; white-space: nowrap; }
-header h1 span { color: var(--gold); }
-.hctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.ctl { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
-.ctl select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
-  padding: 5px 8px; max-width: 230px; }
-.oppnote { color: var(--muted); font-size: 12px; max-width: 260px; line-height: 1.25; }
+header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap;
+  min-height: var(--hdr); max-width: 1248px; margin: 0 auto; padding: 8px 24px; background: var(--bg); }
+header::after { content: ""; position: absolute; left: 24px; right: 24px; bottom: 0; height: 1px; background: var(--line); }
+header h1 { margin: 0 8px 0 0; font: 600 13px/1 var(--sans); white-space: nowrap; }
+.hctl { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.ctl { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .ctl .lts { display: none; }
-.btn { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; }
-.btn.primary { background: var(--gold); color: #231d0b; border-color: var(--gold); font-weight: 600; }
+.oppnote { color: var(--muted); font-size: 12px; max-width: 250px; line-height: 1.3; }
+.btn { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 9px; font-weight: 600;
+  font-size: 13px; white-space: nowrap; box-shadow: 0 0 0 1px var(--line2) inset; transition: background .15s var(--out); }
+.btn.primary { background: var(--text); color: var(--ink); box-shadow: none; }
+.btn .vs { font-weight: 500; }
 .spacer { flex: 1; }
-.pill { padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; white-space: nowrap;
-  background: var(--panel2); border: 1px solid var(--line); }
-.pill.you { background: var(--you-soft); border-color: var(--you); color: #7fe0d4; }
-.pill.ai { background: var(--ai-soft); border-color: var(--ai); color: #ffb48f; }
-.pill.err { background: rgba(229, 83, 75, .15); border-color: var(--danger); color: #ff9c95; }
-.spin { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent;
-  border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.pill { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 500; color: var(--soft);
+  white-space: nowrap; }
+.pill.you { color: var(--text); }
+.pill.you::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--you); }
+.pill.err { color: var(--text); font-weight: 600; }
+.pill span[id], .think span[id], .t { font-family: var(--mono); font-feature-settings: "tnum"; }
+.spin { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--ai));
+  animation: think .9s var(--out) infinite alternate; }
+@keyframes think { to { opacity: .25; } }
 
 /* ---- layout ---- */
-main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px; padding: 14px 18px;
-  max-width: 1480px; margin: 0 auto; align-items: start; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; }
-.side { position: sticky; top: calc(var(--hdr) + 14px); }
-.notes { background: rgba(242, 193, 78, .1); border: 1px solid rgba(242, 193, 78, .5); color: #f5d98f; border-radius: 10px;
-  padding: 8px 12px; font-size: 13px; margin: 12px 18px 0; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 36px; max-width: 1248px; margin: 0 auto;
+  padding: 18px 24px 48px; align-items: start; }
+.side { position: sticky; top: calc(var(--hdr) + 18px); }
+.notes { max-width: 1248px; margin: 0 auto; padding: 10px 24px 0; color: var(--muted); font-size: 12.5px; }
 .notes:empty { display: none; }
+h2 { margin: 0 0 8px; font: 500 11px var(--sans); color: var(--muted); }
 
 /* ---- player strips ---- */
-.strip { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; }
+.strip { display: flex; align-items: center; gap: 10px 24px; flex-wrap: wrap; }
 .who { display: flex; align-items: baseline; gap: 8px; }
-.who b { font-size: 17px; }
-.score { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
-.you-c { color: var(--you); }
-.ai-c { color: var(--ai); }
-.meta { color: var(--muted); font-size: 13px; }
+.who b { font-weight: 600; font-size: 13px; }
+.who b::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%;
+  background: var(--c); vertical-align: 2px; }
+.score { font: 600 24px/1.1 var(--mono); font-feature-settings: "tnum"; color: var(--c); }
+.group { display: flex; flex-direction: column; gap: 4px; }
+.group > :last-child { display: flex; align-items: center; min-height: 24px; }
+.group .lbl { font: 500 11px var(--sans); color: var(--muted); }
 .chips { display: flex; gap: 4px; flex-wrap: wrap; }
-.chip { font-size: 12px; padding: 1px 7px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line);
-  white-space: nowrap; }
-.chip.ai { border-color: rgba(239, 122, 69, .5); }
-.chip.you { border-color: rgba(43, 179, 163, .5); }
+.chip { display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 5px 0 4px; border-radius: 5px;
+  background: var(--c); color: var(--ink); font: 700 11px/1 var(--mono); }
+.chip svg { width: 13px; height: 13px; fill: var(--ink); }
 .backs { display: flex; gap: 4px; }
-.back { width: 22px; height: 31px; border-radius: 5px; border: 1px solid var(--ai);
-  background: repeating-linear-gradient(45deg, #3a2a22, #3a2a22 4px, #4a3329 4px, #4a3329 8px); }
-.group { display: flex; flex-direction: column; gap: 3px; }
-.group .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
-.oppline { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.back { width: 17px; aspect-ratio: 5 / 7; border-radius: 3px; border: 1.5px solid var(--ai); opacity: .9;
+  background: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in srgb, var(--ai) 22%, transparent) 4px 5.5px), var(--panel); }
+.oppline { margin-top: 10px; font-size: 12.5px; color: var(--muted); }
 .oppline b { color: var(--text); font-weight: 600; }
-.oppline .next { color: var(--gold); }
+.oppline .next { color: var(--text); }
 
-/* ---- board ---- */
-.board { margin: 10px 0; padding: 12px 14px; border-radius: 16px; border: 1px solid var(--line);
-  background: radial-gradient(ellipse at 50% 0%, #2b3040 0%, #1d2029 70%); }
-.lane { display: grid; grid-template-columns: 150px minmax(0, 1fr) 130px; grid-template-areas: "gate queue bounce";
-  gap: 12px; align-items: stretch; }
-.gate { grid-area: gate; }
+/* ---- the table: the bar on the left, the queue, the out pile on the right ---- */
+.board { margin: 14px 0 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.lane { display: grid; grid-template-columns: 170px minmax(0, 1fr) 170px; grid-template-areas: "gate queue bounce";
+  align-items: stretch; }
+.gate { grid-area: gate; border-right: 1px solid var(--line); padding: 12px 10px 8px 0; }
 .queuebox { grid-area: queue; }
-.bounce { grid-area: bounce; }
-/* The piles never make the board taller than the queue (size containment): their cards scroll instead. */
-.pile { border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 4px; contain: size;
-  min-height: 150px; overflow: hidden; }
-.gate { background: linear-gradient(180deg, rgba(242, 193, 78, .18), rgba(242, 193, 78, .04));
-  border: 1px solid rgba(242, 193, 78, .55); }
-.pile h3 { margin: 0; font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; }
-.gate h3 { color: var(--gold); }
-.bounce { background: linear-gradient(180deg, rgba(229, 83, 75, .16), rgba(229, 83, 75, .04));
-  border: 1px solid rgba(229, 83, 75, .5); }
-.bounce h3 { color: #ff8e86; }
-.pile .sub { font-size: 11px; color: var(--muted); line-height: 1.2; }
-.minis { display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start; flex: 1; min-height: 0; overflow-y: auto;
-  padding: 4px; scrollbar-width: thin; scrollbar-color: #4a5064 transparent; }
-.pile .head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 6px; }
-.pile .pts { white-space: nowrap; }
-.pts { font-size: 12px; color: var(--muted); }
-.count { font-size: 11px; color: var(--muted); font-weight: 400; letter-spacing: 0; text-transform: none; }
-.queuebox { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.queuehead { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; letter-spacing: 1px;
-  text-transform: uppercase; color: var(--muted); padding: 0 4px; }
+.bounce { grid-area: bounce; border-left: 1px solid var(--line); padding: 12px 0 8px 10px; }
+/* The piles never make the table taller than the queue (size containment): their cards scroll instead. */
+.pile { display: flex; flex-direction: column; gap: 6px; contain: size; min-height: 206px; overflow: hidden; }
+.pile .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 20px; }
+.pile h3 { margin: 0; font: 500 11px/20px var(--sans); color: var(--muted); }
+.pts { display: flex; gap: 10px; font: 600 14px/20px var(--mono); font-feature-settings: "tnum"; }
+.pts b { font-weight: 600; color: var(--c); }
+.count { font: 500 11px/20px var(--mono); color: var(--muted); }
+.minis { --cw: 34px; display: grid; grid-template-columns: repeat(4, var(--cw)); gap: 5px; justify-content: center;
+  align-content: start; flex: 1; min-height: 0; overflow-y: auto; padding: 3px; scrollbar-width: thin;
+  scrollbar-color: var(--faint) transparent; }
+.queuebox { display: flex; flex-direction: column; justify-content: center; gap: 6px; min-width: 0; padding: 12px 16px 8px; }
+.queuehead { display: flex; justify-content: space-between; gap: 8px; font: 500 11px/20px var(--sans); color: var(--muted); }
+.queuehead .pv { color: var(--text); }
 .queue { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; align-items: center; }
-.slot { aspect-ratio: 104 / 146; border: 2px dashed var(--line); border-radius: 12px; display: flex; align-items: center;
-  justify-content: center; color: #6a7084; font-size: 11px; line-height: 1.25; text-align: center; padding: 6px;
+.slot { aspect-ratio: 5 / 7; border: 1px dashed var(--line2); border-radius: 12px; display: flex; align-items: center;
+  justify-content: center; color: var(--muted); font-size: 11px; line-height: 1.3; text-align: center; padding: 6px;
   min-width: 0; min-height: 0; overflow: hidden; container-type: inline-size; }
-.slot.filled { border-color: transparent; padding: 0; overflow: visible; }
-.slot.last { border-color: rgba(229, 83, 75, .35); color: #b5726d; }
-.slot .short { display: none; font-size: 18px; }
-.slot .card { width: 100%; height: 100%; }
-.slotnum { text-align: center; font-size: 11px; color: var(--muted); }
+.slot:nth-child(-n+2) { background: rgba(255, 255, 255, .025); }
+.slot.filled { border-color: transparent; background: none; padding: 0; overflow: visible; }
+.slot .short { display: none; font-size: 10px; }
+.slotnum { text-align: center; font: 500 11px/16px var(--mono); color: var(--faint); }
 
-/* ---- cards (queue cards and hand cards resize with their slot) ---- */
-.card { position: relative; width: 104px; height: 146px; border-radius: 12px; background: var(--card); color: var(--card-ink);
-  border: 3px solid var(--line); box-shadow: 0 3px 10px rgba(0, 0, 0, .35); display: flex; flex-direction: column;
-  align-items: center; justify-content: flex-start; user-select: none; overflow: hidden; padding: 0;
-  transition: transform .12s, box-shadow .12s; font: inherit; text-align: center; }
+/* ---- cards: a solid block of the owner's colour; they resize with their slot (--cw is the card's width) ---- */
+.card { --cw: 100cqw; position: relative; display: block; width: 100%; aspect-ratio: 5 / 7; padding: 0; border: 0;
+  border-radius: calc(var(--cw) * .13); background: var(--c); color: var(--ink); overflow: hidden; user-select: none;
+  -webkit-user-select: none; font: inherit; text-align: left;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .28) inset, 0 calc(var(--cw) * .05) calc(var(--cw) * .16) rgba(0, 0, 0, .5);
+  transition: transform .14s var(--out), box-shadow .14s var(--out); }
 button.card { cursor: pointer; }
-.card > span { display: block; flex-shrink: 0; }
-.card.you { border-color: var(--you); }
-.card.ai { border-color: var(--ai); }
-.card .band { position: absolute; top: 0; left: 0; right: 0; height: 22px; display: flex; align-items: center;
-  padding: 0 6px; font-size: 11px; font-weight: 700; color: #fff; }
-.card.you .band { background: var(--you); }
-.card.ai .band { background: var(--ai); }
-.card .str { font-size: 15px; }
-.card .ptc { position: absolute; top: 0; right: 6px; height: 22px; line-height: 22px; font-size: 11px; font-weight: 700;
-  color: #fff; }
-.card .emo { font-size: 38px; line-height: 1; margin-top: 30px; }
-.card .nm { font-weight: 700; font-size: 13px; margin-top: 3px; text-transform: capitalize; max-width: 100%;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 3px; }
-.card .kind { font-size: 9px; color: #8b8577; text-transform: uppercase; letter-spacing: .6px; min-height: 11px; }
-.card .tip { font-size: 10px; color: #6d675b; padding: 0 6px; margin-top: 2px; line-height: 1.15; display: -webkit-box;
-  -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.card .why { font-size: 10.5px; color: #b0352c; font-weight: 700; padding: 0 5px; margin-top: 2px; line-height: 1.15; }
-.slot .card .emo { font-size: clamp(20px, 34cqw, 40px); margin-top: max(24px, 21cqw); }
-.hslot .card .emo { font-size: clamp(20px, 33cqw, 38px); margin-top: max(22px, 26cqw); }
-@container (max-width: 92px) {
-  .card { border-width: 2px; border-radius: 9px; }
-  .card .band { height: 17px; padding: 0 4px; }
-  .card .str { font-size: 12px; }
-  .card .ptc { top: auto; bottom: 2px; right: 4px; height: auto; line-height: 1; font-size: 10px; color: #8a6d12; }
-  .card .nm { font-size: min(11px, 16cqw); margin-top: 1px; padding: 0 2px; }
-  .card .kind { display: none; }
-  .card .tip { font-size: 9px; padding: 0 3px; line-height: 1.1; -webkit-line-clamp: 2; }
-  .card .why { font-size: 9px; padding: 0 3px; }
+.card > span, .mini > span { display: block; }
+.card .str { position: absolute; left: 9%; top: 5%; font: 800 calc(var(--cw) * .2)/1 var(--sans); letter-spacing: -.03em; }
+.card .dots { position: absolute; right: 9%; top: 8.5%; display: flex; gap: calc(var(--cw) * .028); }
+.card .dots i { width: calc(var(--cw) * .058); height: calc(var(--cw) * .058); border-radius: 50%; background: var(--ink); }
+.gl { position: absolute; left: 17%; top: 24%; width: 66%; height: 50%; fill: var(--ink); }
+.card .nm { position: absolute; left: 0; right: 0; bottom: 6%; text-align: center;
+  font: 600 max(9px, calc(var(--cw) * .105))/1 var(--sans); letter-spacing: .01em; }
+@container (max-width: 84px) {
   .slot .full { display: none; }
   .slot .short { display: block; }
 }
-@container (max-width: 50px) {
-  .card .nm { display: none; }
+@container (max-width: 61px) {
+  .card .nm, .card .dots { display: none; }
+  .card .str { font-size: calc(var(--cw) * .27); }
+  .card .gl { left: 14%; top: 34%; width: 72%; height: 54%; }
 }
-.mini { width: 36px; height: 46px; border-radius: 6px; background: var(--card); color: var(--card-ink);
-  border: 2px solid var(--line); display: flex; flex-direction: column; align-items: center; justify-content: center;
-  position: relative; flex: 0 0 auto; }
-.mini.you { border-color: var(--you); }
-.mini.ai { border-color: var(--ai); }
-.mini .emo { font-size: 19px; line-height: 1; }
-.mini .s { position: absolute; top: 0; left: 2px; font-size: 9px; font-weight: 700; }
-.mini .p { position: absolute; bottom: 0; right: 2px; font-size: 9px; font-weight: 700; color: #8a6d12; }
-.mini.new { box-shadow: 0 0 0 2px var(--gold); }
-.mini.recent { box-shadow: 0 0 0 1px #fff, 0 0 0 3px var(--glow, var(--ai)); }
-.card.justplayed { box-shadow: 0 0 0 2px rgba(255, 255, 255, .8), 0 0 12px 2px var(--glow, var(--ai)); }
-.by-you { --glow: var(--you); }
-.by-ai { --glow: var(--ai); }
+.mini { position: relative; width: var(--cw); aspect-ratio: 5 / 7; border-radius: calc(var(--cw) * .13); background: var(--c);
+  color: var(--ink); }
+.mini .s { position: absolute; left: 9%; top: 6%; font: 800 calc(var(--cw) * .3)/1 var(--sans); letter-spacing: -.03em; }
+.mini .gl { left: 14%; top: 34%; width: 72%; height: 56%; }
+/* the last move's cards: a solid ring; what the previewed move would do: a dashed one */
+.mini.recent, .card.justplayed { box-shadow: 0 0 0 2px var(--text); }
+.mini.new, .card.ghost { outline: 1px dashed var(--soft); outline-offset: 2px; }
+.card.ghost.justplayed { outline: 0; }
+.card.selected { transform: translateY(-8px); box-shadow: 0 0 0 2px var(--text), 0 10px 24px rgba(0, 0, 0, .6); }
+.card.target { box-shadow: 0 0 0 2px var(--text); }
+.card.dead { opacity: .3; box-shadow: none; }
 @media (hover: hover) {
-  .card.pick:hover { transform: translateY(-4px); box-shadow: 0 8px 18px rgba(0, 0, 0, .45); }
-  .card.target:hover { transform: translateY(-4px); }
-  .btn:hover:not(:disabled) { border-color: var(--muted); }
-  .btn.primary:hover:not(:disabled) { filter: brightness(1.07); }
+  .card.pick:not(.selected):hover, .card.target:hover { transform: translateY(-4px); }
+  .btn:hover:not(:disabled) { background: var(--raise); }
+  .btn.primary:hover:not(:disabled) { background: #fff; }
 }
-.card.selected { transform: translateY(-8px); box-shadow: 0 0 0 3px var(--gold), 0 10px 22px rgba(0, 0, 0, .5); }
-.card.ghost { opacity: .93; outline: 2px dashed var(--gold); outline-offset: 2px; }
-.queuehead .pv { color: var(--gold); font-weight: 700; }
-.card.dead .band, .card.dead .emo, .card.dead .nm, .card.dead .kind, .card.dead .ptc { filter: grayscale(.8); opacity: .5; }
-.card.dead { background: #e6e1d6; }
-.card.target { box-shadow: 0 0 0 3px var(--gold); animation: pulse 1.2s ease-in-out infinite; }
-@keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(242, 193, 78, .45); } }
 
 /* ---- your side: prompt, hand, strip ---- */
-.prompt { min-height: 58px; display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 8px 12px;
-  border-radius: 10px; background: var(--panel2); border: 1px solid var(--line); }
+.prompt { min-height: 92px; display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 12px 0; }
 .prompt .row { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
 .prompt .msg { font-weight: 600; }
-.prompt .story { font-size: 14px; }
-.lastmove { font-size: 13.5px; padding-left: 8px; border-left: 3px solid var(--ai); }
-.lastmove .t, .entry .t { color: var(--muted); font-size: 11px; margin-left: 4px; }
-.offline { color: #ff9c95; font-weight: 600; }
-.kbd { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
-.hand { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; padding: 12px 0 4px; }
+.lastmove { font-size: 13px; color: var(--soft); }
+.t { color: var(--muted); font-size: 11px; margin-left: 6px; }
+.offline { font-weight: 600; }
+.kbd { font: 500 11px/18px var(--mono); color: var(--muted); border-radius: 4px; padding: 0 5px;
+  box-shadow: 0 0 0 1px var(--line2) inset; }
+.think { display: flex; align-items: center; gap: 8px; color: var(--soft); font-weight: 500; }
+.hand { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; padding: 8px 0 14px; }
 .hslot { width: 104px; container-type: inline-size; }
-.hslot .card { width: 100%; height: auto; aspect-ratio: 104 / 146; }
-.youstrip { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
-@media (hover: none) { .hoverhint { display: none; } }
+.cap { display: block; margin-top: 8px; font-size: 11px; line-height: 1.3; color: var(--muted); text-align: center; }
+.youstrip { padding-top: 14px; border-top: 1px solid var(--line); }
 
 /* ---- log ---- */
-.log { overflow-y: auto; max-height: calc(100vh - var(--hdr) - 90px); min-height: 160px; display: flex;
-  flex-direction: column; gap: 6px; padding-right: 4px; }
-.entry { padding: 6px 9px; border-radius: 8px; background: var(--panel2); border-left: 3px solid var(--line); font-size: 13.5px; }
-.entry.you { border-left-color: var(--you); }
-.entry.ai { border-left-color: var(--ai); }
-.entry.last { outline: 1px solid rgba(255, 255, 255, .25); }
-.entry .n { color: var(--muted); font-size: 11px; margin-right: 6px; font-variant-numeric: tabular-nums; }
-.nmy { color: #7fe0d4; font-weight: 600; }
-.nma { color: #ffb48f; font-weight: 600; }
-h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 8px; }
-.think { display: flex; align-items: center; gap: 8px; color: #ffb48f; font-weight: 600; }
+.log { overflow-y: auto; max-height: calc(100vh - var(--hdr) - 96px); min-height: 160px; padding-right: 6px;
+  scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
+.entry { padding: 7px 0; border-top: 1px solid var(--line); font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.entry:first-child { border-top: 0; padding-top: 0; }
+.entry.last { color: var(--text); }
+.entry b { color: var(--text); font-weight: 600; }
+.entry .n { font: 500 11px var(--mono); color: var(--faint); margin-right: 8px; }
+.nmy { color: var(--you); font-weight: 600; }
+.nma { color: var(--ai); font-weight: 600; }
 
-/* ---- overlays ---- */
-.overlay { position: fixed; inset: 0; background: rgba(8, 9, 12, .62); display: none; align-items: center;
+/* ---- end screen, rules sheet, toasts ---- */
+.overlay { position: fixed; inset: 0; background: rgba(10, 10, 12, .78); display: none; align-items: center;
   justify-content: center; z-index: 20; padding: 16px; }
 .overlay.show { display: flex; }
-.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 24px 26px; max-width: 460px;
-  width: 100%; text-align: center; box-shadow: 0 20px 60px rgba(0, 0, 0, .6); }
-.modal h2 { font-size: 26px; text-transform: none; letter-spacing: 0; color: var(--text); margin-bottom: 6px; }
-.final { display: flex; justify-content: center; gap: 30px; margin: 16px 0; }
-.final div { display: flex; flex-direction: column; align-items: center; }
-.final .score { font-size: 40px; }
-.modal .row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: var(--panel);
-  border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .2s; z-index: 30; overflow-y: auto;
-  padding: 18px 20px 30px; box-shadow: -10px 0 40px rgba(0, 0, 0, .5); visibility: hidden; }
-.drawer.show { transform: none; visibility: visible; }
-.drawer h3 { margin: 18px 0 6px; font-size: 15px; color: var(--gold); }
-.drawer table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.drawer td, .drawer th { border-bottom: 1px solid var(--line); padding: 5px 4px; vertical-align: top; text-align: left; }
-.drawer th { color: var(--muted); font-weight: 600; font-size: 12px; }
-.drawer td.c { text-align: center; white-space: nowrap; }
-.drawer ol, .drawer ul { padding-left: 20px; margin: 4px 0; font-size: 13.5px; }
-.drawer li { margin: 3px 0; }
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--danger); color: #fff;
-  padding: 8px 14px; border-radius: 8px; display: none; z-index: 40; max-width: calc(100vw - 32px); text-align: center; }
-.toast.info { background: #3b4256; border: 1px solid var(--muted); }
+.modal { background: var(--panel); box-shadow: 0 0 0 1px var(--line2) inset; border-radius: 14px; padding: 26px 28px 24px;
+  max-width: 400px; width: 100%; animation: rise .22s var(--out); }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+.modal h2 { margin: 0 0 4px; font: 600 17px/1.3 var(--sans); color: var(--text); }
+.final { display: flex; gap: 44px; margin: 22px 0; }
+.final div { display: flex; flex-direction: column; gap: 4px; }
+.final .score { font-size: 44px; line-height: 1; }
+.modal .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(540px, 100vw); background: var(--panel);
+  border-left: 1px solid var(--line2); transform: translateX(100%); visibility: hidden; z-index: 30; overflow-y: auto;
+  padding: 0 24px 32px; font-size: 13px; color: var(--soft);
+  transition: transform .22s var(--out), visibility 0s .22s; }
+.drawer.show { transform: none; visibility: visible; transition: transform .22s var(--out); }
+.drawer .top { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center;
+  height: var(--hdr); background: var(--panel); border-bottom: 1px solid var(--line); }
+.drawer .top h2 { margin: 0; font: 600 13px var(--sans); color: var(--text); }
+.drawer h3 { margin: 22px 0 6px; font: 600 13px var(--sans); color: var(--text); }
+.drawer b { color: var(--text); font-weight: 600; }
+.drawer table { width: 100%; border-collapse: collapse; }
+.drawer td, .drawer th { border-top: 1px solid var(--line); padding: 7px 10px 7px 0; vertical-align: top; text-align: left; }
+.drawer th { border-top: 0; color: var(--muted); font: 500 11px var(--sans); }
+.drawer td.c, .drawer th.c { font-family: var(--mono); text-align: right; white-space: nowrap; }
+.drawer td:first-child { white-space: nowrap; }
+.drawer .rg { width: 16px; height: 16px; margin-right: 8px; fill: var(--soft); vertical-align: -3px; }
+.drawer ol, .drawer ul { padding-left: 18px; margin: 4px 0; }
+.drawer li { margin: 4px 0; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); display: none; z-index: 40;
+  max-width: calc(100vw - 32px); padding: 9px 14px; border-radius: 10px; background: var(--raise); color: var(--text);
+  box-shadow: 0 0 0 1px var(--line2) inset, 0 8px 24px rgba(0, 0, 0, .5); font-size: 13px; font-weight: 500; text-align: center; }
+.toast.info { color: var(--soft); }
 
 /* ---- widths ---- */
 @media (max-width: 1280px) {
-  main { grid-template-columns: minmax(0, 1fr) 270px; gap: 14px; }
-  .lane { grid-template-columns: 128px minmax(0, 1fr) 116px; gap: 10px; }
+  main { grid-template-columns: minmax(0, 1fr) 270px; gap: 28px; }
   .hslot { width: 96px; }
-  .entry { font-size: 13px; }
 }
 @media (max-width: 1000px) {
   main { grid-template-columns: minmax(0, 1fr); }
-  .side { position: static; }
+  .side { position: static; padding-top: 16px; border-top: 1px solid var(--line); }
   .log { max-height: 360px; }
   .oppnote { display: none; }
 }
 @media (max-width: 860px) {
-  header { position: static; }
-  .side { position: static; }
-  .lane { grid-template-columns: 104px minmax(0, 1fr) 100px; gap: 8px; }
-  .mini { width: 32px; height: 42px; }
-  .mini .emo { font-size: 17px; }
-  .pile { padding: 6px; }
-  .pile .sub { display: none; }
-  .pile h3 { font-size: 11px; letter-spacing: .6px; }
+  header { position: relative; }
+  .pile { min-height: 236px; }
+  header h1 { order: 0; }
+  .spacer { order: 1; }
+  #status { order: 2; }
+  #newgame { order: 3; }
+  #rulesbtn { order: 4; }
+  .hctl { order: 5; width: 100%; }
+  .lane { grid-template-columns: 118px minmax(0, 1fr) 118px; }
+  .minis { --cw: 30px; grid-template-columns: repeat(3, var(--cw)); }
+  .queuebox { padding: 12px 10px 8px; }
 }
 @media (max-width: 600px) {
-  header { position: static; padding: 8px 12px; gap: 8px 10px; min-height: 0; }
-  header h1 { font-size: 17px; margin-right: 0; }
-  header h1 { order: 0; }
-  #newgame { order: 1; }
-  #rulesbtn { order: 2; }
-  .spacer { order: 3; }
+  header { padding: 10px 16px 12px; gap: 10px; min-height: 0; }
+  header::after { left: 16px; right: 16px; }
+  header h1 { margin-right: 0; }
   #status { display: none; }
-  .hctl { order: 5; width: 100%; gap: 10px; flex-wrap: nowrap; }
+  .hctl { gap: 12px; flex-wrap: nowrap; }
   .ctl .lt { display: none; }
   .ctl .lts { display: inline; }
   .ctl:first-child { flex: 1; min-width: 0; }
   .ctl:first-child select { flex: 1; min-width: 0; max-width: none; }
-  .ctl select { padding: 4px 6px; }
   #newgame .vs { display: none; }
-  .notes { margin: 8px 12px 0; }
-  main { padding: 8px 10px 16px; gap: 10px; }
-  .panel { padding: 8px 10px; }
+  .notes { padding: 8px 16px 0; }
+  main { padding: 14px 16px 32px; }
+  .strip { gap: 10px 18px; }
   .score { font-size: 22px; }
-  .chip { padding: 1px 4px; }
-  .chip .cn { display: none; }
-  .group .lbl { font-size: 10px; letter-spacing: .5px; }
-  .board { margin: 8px 0; padding: 8px; border-radius: 12px; }
-  .lane { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "gate bounce" "queue queue";
-    gap: 6px; }
-  .pile { contain: none; min-height: 0; padding: 5px 6px; gap: 3px; }
-  .pile h3 { font-size: 11px; letter-spacing: .5px; }
-  .minis { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; height: 46px; flex: none; padding: 4px; }
-  .mini { width: 30px; height: 36px; }
-  .mini .emo { font-size: 15px; }
-  .mini .s, .mini .p { font-size: 8px; }
-  .queue { gap: 4px; }
-  .slot { border-radius: 9px; padding: 2px; }
-  .prompt { min-height: 52px; padding: 7px 9px; }
-  .prompt .story, .lastmove { font-size: 13px; }
-  .hand { gap: 6px; flex-wrap: nowrap; padding-top: 10px; }
+  .board { margin-top: 12px; }
+  .prompt { min-height: 80px; }
+  .lane { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "gate bounce" "queue queue"; }
+  .gate, .bounce { border-bottom: 1px solid var(--line); padding-top: 8px; padding-bottom: 6px; }
+  .pile { contain: none; min-height: 0; gap: 2px; }
+  .minis { display: flex; overflow-x: auto; overflow-y: hidden; height: 50px; flex: none; justify-content: flex-start; }
+  .mini { flex: none; }
+  .queuebox { padding: 8px 0; gap: 4px; }
+  .queue { gap: 5px; }
+  .slot { border-radius: 9px; padding: 3px; }
+  .hand { gap: 6px; flex-wrap: nowrap; }
   .hslot { width: auto; flex: 1 1 0; min-width: 0; max-width: 104px; }
+  .cap { font-size: 10.5px; }
   .card.selected { transform: translateY(-5px); }
   .kbd { display: none; }
+  .drawer { padding: 0 16px 28px; }
 }
 </style>
 </head>
 <body>
+<!-- The twelve animal glyphs (original artwork, the same paths as site/glyphs.js), used by every card. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="g-skunk" viewBox="0 0 785 729"><path transform="translate(0,729) scale(.1,-.1)" d="M2515 7284 c-175 -8 -547 -36 -660 -49 -66 -8 -140 -16 -165 -17 -67 -4 -63 -26 15 -77 73 -48 80 -66 33 -77 -90 -19 -438 -199 -639 -330 -282 -183 -688 -549 -641 -577 8 -6 254 10 295 19 43 9 34 -19 -20 -63 -127 -104 -411 -434 -452 -525 -113 -250 -245 -798 -275 -1140 -8 -89 1 -91 82 -20 177 155 316 259 489 366 113 70 130 68 84 -8 -44 -73 -167 -513 -191 -684 -15 -105 -8 -126 32 -100 22 13 213 95 288 123 19 7 53 19 75 27 137 51 314 100 400 112 28 4 67 12 88 18 56 17 62 3 31 -68 -59 -131 -169 -439 -224 -624 -112 -381 -123 -448 -100 -650 28 -245 55 -453 84 -640 8 -52 19 -129 26 -170 21 -141 42 -243 55 -274 8 -17 28 -67 45 -111 17 -44 37 -93 44 -110 8 -16 35 -84 60 -150 26 -66 54 -132 62 -147 18 -33 18 -63 0 -96 -7 -15 -23 -47 -34 -72 -11 -25 -34 -74 -50 -110 -17 -36 -49 -108 -72 -160 -23 -52 -58 -130 -77 -174 -29 -65 -34 -86 -28 -121 9 -64 131 -546 146 -578 l12 -27 746 2 c661 3 746 5 749 18 5 27 -117 197 -188 263 -97 89 -265 181 -408 222 -12 3 -22 10 -22 14 0 11 86 90 215 197 200 166 586 489 654 547 75 64 70 63 401 73 210 7 612 -16 650 -36 12 -6 19 -28 23 -72 4 -35 12 -97 18 -138 30 -199 39 -236 86 -335 119 -250 356 -722 370 -737 22 -25 1360 -28 1369 -4 7 17 -33 89 -92 166 -127 168 -379 303 -625 336 -70 9 -74 19 -54 111 46 216 165 545 279 772 l44 86 93 57 c134 80 230 133 369 203 163 82 148 79 288 72 70 -4 276 -14 457 -23 424 -22 753 -24 816 -6 103 30 252 207 274 325 15 79 1 95 -208 237 -65 44 -118 88 -135 112 -206 299 -311 416 -507 565 -56 43 -102 87 -122 118 -122 187 -334 310 -538 310 -119 0 -147 -14 -238 -116 l-56 -63 -43 14 c-84 28 -235 98 -336 159 -57 33 -105 61 -106 61 -2 0 -73 40 -157 88 -245 140 -556 290 -646 312 -242 58 -583 110 -724 110 -103 0 -110 12 -51 90 148 196 393 583 464 730 139 291 178 436 147 554 -6 22 -18 68 -26 101 -35 136 -109 359 -149 450 -7 17 -19 46 -27 65 -105 261 -351 708 -417 760 -166 130 -650 367 -953 466 -151 49 -252 59 -502 48z m67 -809 c280 -14 553 -79 668 -160 366 -258 649 -611 765 -955 20 -61 19 -122 -4 -211 -46 -175 -82 -259 -209 -479 -104 -180 -252 -377 -501 -668 -58 -68 -123 -145 -144 -170 -22 -26 -60 -69 -86 -97 -26 -27 -80 -88 -121 -135 -41 -47 -79 -90 -84 -96 -11 -11 -88 -98 -181 -204 -27 -30 -70 -77 -96 -105 -145 -155 -166 -187 -220 -350 -10 -33 -24 -68 -29 -77 -30 -53 -2 -49 90 11 205 133 249 161 254 161 3 0 33 19 68 43 35 24 70 46 78 50 8 4 29 16 45 27 17 11 39 24 50 30 11 6 34 19 50 29 17 11 48 29 70 41 22 12 63 35 90 50 28 15 82 44 120 65 39 21 75 41 80 45 6 3 45 21 87 39 l78 34 317 -6 c467 -8 821 -43 1038 -102 28 -7 79 -21 115 -30 107 -28 249 -69 315 -90 237 -76 216 -75 550 -30 382 52 555 37 848 -72 94 -35 317 -200 317 -234 0 -13 -33 -11 -55 4 -105 71 -745 141 -844 92 -20 -9 -49 -23 -66 -30 -16 -8 -104 -49 -195 -93 -91 -44 -192 -92 -225 -107 -33 -14 -88 -40 -122 -56 -72 -33 -137 -38 -236 -15 -59 14 -146 31 -307 61 -83 16 -201 35 -360 60 -58 9 -133 20 -166 25 -81 13 -281 13 -402 0 -259 -28 -416 -48 -472 -60 -25 -5 -85 -16 -135 -25 -49 -9 -119 -23 -155 -30 -36 -8 -101 -21 -145 -30 -44 -9 -100 -23 -125 -30 -25 -7 -61 -16 -80 -19 -30 -5 -77 -30 -209 -111 -125 -76 -536 -360 -670 -462 -24 -18 -50 -33 -57 -33 -35 0 -7 1001 32 1122 12 40 60 126 134 243 32 51 136 216 145 233 6 9 49 76 96 147 222 337 477 788 524 930 27 82 24 170 -10 260 -15 39 -30 82 -35 97 -45 144 -232 421 -323 476 -39 25 -174 63 -317 91 -58 12 -127 26 -155 31 -120 24 -339 41 -587 47 -148 3 -268 9 -268 13 0 43 536 355 745 434 149 56 357 92 593 103 100 4 142 10 142 18 0 20 -198 188 -257 219 -48 24 -44 59 6 51 14 -2 78 -7 143 -10z m4227 -3955 c79 -26 165 -64 246 -107 52 -28 135 -95 129 -105 -25 -39 -229 -96 -287 -79 -73 22 -86 37 -148 167 -82 174 -83 173 60 124z"/></symbol>
+<symbol id="g-parrot" viewBox="0 0 583 772"><path transform="translate(0,772) scale(.1,-.1)" d="M3755 7711 c-100 -7 -94 -4 -244 -120 -354 -276 -741 -669 -741 -755 0 -2 -16 -39 -36 -83 -60 -132 -43 -90 -230 -557 -161 -402 -161 -400 -106 -392 59 10 214 26 245 26 37 0 31 -19 -14 -44 -97 -56 -710 -460 -846 -557 -91 -66 -95 -73 -256 -374 -261 -491 -663 -1357 -841 -1815 -21 -52 -44 -108 -53 -123 -19 -36 -4 -58 25 -36 42 30 163 131 219 182 32 29 89 80 128 112 78 67 340 302 455 409 41 38 171 166 288 283 251 252 261 258 198 122 -56 -124 -206 -495 -209 -519 -3 -21 37 -25 53 -5 7 8 18 15 24 15 14 0 160 62 276 117 210 99 634 312 698 350 41 24 75 43 78 43 3 0 138 77 174 100 8 5 33 19 55 31 22 11 59 34 83 50 24 16 45 29 48 29 38 0 489 363 574 463 57 66 72 52 34 -31 -14 -31 -29 -66 -34 -77 -42 -107 -209 -441 -249 -500 -126 -186 -269 -369 -416 -534 -174 -194 -184 -202 -323 -245 -181 -57 -304 -94 -342 -105 -19 -5 -89 -25 -155 -45 -150 -45 -199 -59 -300 -86 -44 -12 -93 -26 -110 -31 -41 -13 -203 -59 -240 -69 -89 -23 -456 -125 -560 -155 -66 -19 -146 -41 -178 -50 -50 -15 -64 -24 -109 -78 -144 -173 -698 -945 -698 -973 0 -17 143 50 335 156 28 15 127 67 220 115 94 48 175 91 180 95 18 13 137 76 264 140 68 34 146 75 173 91 87 51 101 37 35 -37 -24 -27 -86 -105 -139 -174 -53 -69 -178 -226 -278 -350 l-181 -225 -283 -570 c-156 -313 -309 -624 -341 -690 -31 -66 -68 -142 -81 -168 -32 -61 -25 -71 34 -47 207 84 415 174 553 240 15 6 42 36 60 66 19 30 58 91 87 137 29 45 70 109 91 142 21 33 80 128 131 210 179 290 283 445 297 445 9 0 13 -6 11 -12 -7 -18 -35 -131 -52 -208 -33 -149 -109 -469 -123 -518 -23 -76 -9 -84 64 -37 32 20 125 78 207 129 l150 93 61 109 c340 606 460 817 667 1165 86 146 164 272 173 279 31 26 431 -6 485 -39 25 -15 53 -30 63 -34 25 -9 21 -34 -9 -53 -32 -22 -106 -118 -134 -175 -12 -24 -26 -52 -31 -62 -26 -48 14 -48 217 2 388 96 529 91 705 -26 55 -36 209 -277 209 -325 0 -8 6 -23 14 -34 8 -11 16 -31 18 -44 9 -65 92 18 117 117 5 21 15 57 21 79 11 39 -6 166 -35 262 -24 76 187 -38 351 -191 80 -74 83 -74 103 7 31 128 -36 294 -170 421 -116 110 -147 122 -364 139 -44 3 -183 13 -308 23 l-228 17 -55 110 c-30 61 -54 115 -54 121 0 5 69 83 153 172 289 309 421 448 532 563 189 196 359 385 371 410 10 23 19 53 59 193 33 118 43 155 60 217 10 36 23 85 30 110 7 25 20 74 30 110 9 36 23 88 30 115 8 28 21 79 30 115 9 36 22 86 30 111 19 58 19 98 1 185 -8 38 -22 114 -31 169 -9 55 -22 132 -30 170 -7 39 -20 115 -30 170 -9 55 -23 134 -30 175 -8 41 -17 100 -21 130 -7 70 -22 89 -109 135 -263 141 -673 494 -709 611 -9 29 22 205 58 334 40 139 49 167 130 385 18 47 24 54 86 85 175 88 486 126 721 86 l94 -15 60 -64 c33 -35 78 -96 100 -135 41 -73 61 -86 86 -56 7 9 78 70 156 136 89 74 143 126 143 138 0 30 -386 328 -452 349 -69 21 -925 45 -1143 32z M5345 7078 c-44 -38 -107 -93 -140 -121 -118 -102 -407 -383 -440 -427 -61 -84 -143 -263 -178 -390 -50 -180 -58 -244 -30 -254 65 -25 510 -13 566 16 14 7 17 24 17 113 0 129 4 130 87 26 104 -130 183 -336 183 -480 0 -93 18 -92 106 5 330 364 411 856 203 1243 -63 118 -252 343 -286 340 -4 0 -44 -32 -88 -71z M4394 7122 c-136 -64 -138 -264 -4 -332 168 -86 341 100 247 264 -46 80 -153 110 -243 68z"/></symbol>
+<symbol id="g-kangaroo" viewBox="0 0 770 768"><path transform="translate(0,768) scale(.1,-.1)" d="M6519 7628 c-86 -101 -141 -179 -186 -265 l-46 -86 12 -161 c7 -89 19 -197 27 -241 17 -97 13 -103 -63 -85 -72 17 -78 22 -110 84 -14 28 -54 98 -88 156 -34 58 -87 150 -118 205 -77 140 -52 123 -377 255 -302 123 -381 151 -395 140 -30 -25 33 -593 82 -741 22 -66 96 -125 347 -275 246 -149 254 -155 228 -187 -6 -7 -40 -96 -76 -198 -35 -102 -92 -257 -125 -345 -32 -87 -82 -220 -109 -294 -93 -250 -173 -445 -190 -461 -26 -26 -417 -166 -662 -239 -41 -12 -106 -33 -145 -45 -38 -13 -101 -32 -140 -44 -38 -11 -124 -36 -190 -57 -66 -20 -142 -43 -170 -51 -27 -8 -72 -22 -100 -30 -27 -8 -70 -21 -95 -28 -192 -56 -250 -74 -285 -89 -44 -19 -555 -524 -936 -927 -203 -214 -215 -228 -230 -285 -9 -32 -24 -84 -33 -115 -9 -31 -16 -65 -16 -76 0 -11 -6 -39 -14 -64 -7 -24 -21 -72 -30 -106 -9 -35 -23 -91 -32 -125 -9 -35 -22 -85 -29 -113 -37 -140 -58 -229 -74 -310 -5 -22 -14 -62 -21 -90 -6 -27 -19 -77 -27 -110 -8 -33 -21 -85 -28 -115 -7 -30 -19 -75 -26 -100 -6 -25 -18 -72 -26 -105 -14 -62 -22 -95 -43 -180 -6 -27 -18 -76 -26 -107 -8 -32 -20 -84 -28 -115 -8 -32 -22 -92 -31 -133 -74 -337 -54 -293 -218 -475 -218 -242 -217 -241 -397 -313 -292 -115 -792 -288 -1050 -362 -192 -55 -230 -74 -230 -110 0 -76 220 -95 1050 -94 727 2 673 -9 1053 206 l178 101 142 190 c78 105 162 219 187 253 25 35 87 120 139 191 52 70 130 178 174 238 173 243 463 625 473 625 7 0 19 -10 27 -23 8 -12 52 -62 97 -112 125 -138 122 -111 50 -440 -9 -44 -31 -154 -55 -280 -22 -113 -45 -223 -57 -270 -6 -22 -14 -62 -18 -90 -9 -51 -18 -98 -64 -330 -14 -72 -31 -156 -37 -187 -6 -31 -9 -64 -6 -73 9 -22 3427 -23 3427 -1 0 27 -509 480 -600 534 l-45 27 -435 4 c-428 3 -847 -7 -1310 -34 -131 -8 -239 -10 -244 -5 -8 8 150 416 234 605 33 74 50 115 50 119 0 3 11 29 24 58 14 29 44 98 67 153 23 55 52 123 65 152 13 28 24 54 24 57 0 2 15 38 34 79 19 40 71 159 116 263 86 199 102 234 182 408 43 91 54 130 74 245 29 170 84 413 95 426 10 10 97 -71 219 -206 l77 -86 7 -159 c6 -125 4 -171 -7 -214 -46 -176 -39 -187 108 -161 139 25 171 40 184 88 30 104 65 314 78 460 l6 72 -100 188 c-199 373 -343 650 -343 659 0 5 15 32 33 59 17 28 38 62 44 78 19 42 37 33 83 -45 24 -40 85 -141 136 -225 211 -343 394 -675 394 -714 0 -57 -53 -268 -110 -438 -42 -126 -43 -125 82 -116 180 12 180 12 314 360 84 219 82 232 -128 820 -91 255 -108 306 -108 334 0 14 36 147 80 295 63 208 95 341 145 590 35 176 75 373 89 436 14 63 37 171 52 240 15 69 30 129 35 134 10 11 309 9 584 -4 110 -5 263 -10 339 -11 l140 -2 42 46 c39 43 104 175 104 210 0 8 7 31 15 50 46 110 29 130 -216 265 l-186 102 -136 143 -135 142 -157 79 c-86 44 -159 85 -162 92 -2 7 18 88 45 180 28 93 58 196 68 229 45 155 8 281 -152 523 -66 98 -75 100 -135 30z m52 -1289 c144 -36 309 -132 309 -180 0 -16 -176 -70 -224 -69 -91 1 -120 25 -200 168 -64 113 -51 122 115 81z"/></symbol>
+<symbol id="g-monkey" viewBox="0 0 773 689"><path transform="translate(0,689) scale(.1,-.1)" d="M4458 6885 c-3 -3 -122 -45 -264 -94 -142 -49 -351 -121 -464 -161 -372 -129 -986 -332 -1148 -380 -92 -27 -132 -61 -521 -445 -375 -370 -506 -512 -514 -556 -50 -297 -55 -316 -86 -304 -103 41 -456 58 -593 30 -369 -78 -808 -632 -859 -1086 -58 -503 243 -1207 623 -1461 172 -115 392 -188 570 -188 50 0 51 -2 51 -184 -1 -188 -14 -156 146 -366 69 -91 174 -229 233 -308 60 -78 152 -198 206 -265 53 -68 126 -161 161 -208 74 -98 30 -65 601 -450 245 -165 487 -329 538 -365 146 -103 81 -95 755 -92 l593 3 69 48 c39 27 120 82 180 124 61 42 180 123 265 181 85 58 205 139 265 181 61 41 178 121 260 177 131 88 158 111 211 180 33 43 174 228 313 409 138 182 294 385 346 452 l95 121 0 169 c0 191 1 193 69 194 304 3 639 198 827 480 211 316 344 726 344 1055 -1 487 -447 1106 -864 1199 -95 21 -392 16 -521 -9 -96 -19 -98 -17 -114 82 -6 37 -19 107 -28 156 l-17 89 -380 383 -381 382 -90 27 c-188 55 -260 80 -260 91 0 7 87 101 193 209 118 121 190 201 184 207 -5 5 -34 5 -73 -2 -35 -6 -192 -28 -349 -50 -548 -77 -478 -61 -800 -176 -133 -48 -139 -42 -65 53 49 64 200 268 282 382 29 40 50 77 47 82 -6 10 -28 12 -36 4z m571 -2087 c42 -29 166 -120 275 -203 110 -82 220 -164 245 -182 179 -125 246 -187 252 -233 67 -483 96 -816 72 -843 -75 -87 -300 -331 -538 -581 -354 -373 -320 -329 -300 -386 8 -23 15 -52 15 -63 0 -11 7 -43 15 -71 14 -49 71 -285 120 -501 20 -91 42 -184 55 -243 11 -49 11 -56 -7 -80 -11 -15 -59 -85 -108 -157 -207 -303 -524 -743 -541 -749 -105 -40 -738 -58 -1119 -31 -329 23 -299 12 -395 145 -472 658 -570 801 -570 830 0 12 16 85 35 163 31 131 111 478 151 657 9 41 21 88 25 104 15 49 13 53 -133 204 -196 202 -584 617 -658 702 l-60 71 0 72 c0 137 42 551 71 707 19 104 2 87 384 374 190 142 400 296 437 319 39 23 59 22 152 -12 45 -16 122 -44 171 -62 50 -17 104 -38 122 -45 17 -8 35 -14 41 -14 9 0 137 -49 197 -75 17 -7 57 -23 90 -34 33 -11 85 -30 115 -41 237 -90 226 -90 380 -30 30 12 73 27 95 34 22 7 108 39 190 71 83 32 168 64 190 71 22 8 49 19 60 24 29 13 156 61 185 71 14 4 61 21 105 37 104 39 97 40 184 -20z m-3790 -513 c75 -20 74 -13 46 -201 -29 -201 -58 -525 -81 -910 -18 -290 -23 -316 -60 -296 -11 6 -39 18 -64 28 -158 65 -349 256 -419 419 -12 28 -26 58 -31 67 -5 9 -18 51 -30 94 -59 226 -27 411 102 587 134 181 343 264 537 212z m5540 -14 c230 -93 392 -353 378 -606 -19 -359 -231 -653 -565 -785 -49 -19 -51 -12 -62 190 -21 394 -56 793 -95 1074 -17 124 -19 116 43 137 83 29 217 24 301 -10z M2585 3912 c-129 -13 -132 1 68 -346 171 -295 175 -297 648 -288 170 3 166 -2 150 143 -35 327 -43 349 -141 396 -158 75 -481 118 -725 95z M4815 3910 c-241 -19 -419 -80 -468 -160 -33 -55 -76 -439 -50 -457 54 -40 577 -15 632 30 14 12 121 171 121 181 0 2 34 61 75 130 41 69 75 128 75 131 0 3 14 28 31 56 28 45 30 52 17 65 -28 28 -236 40 -433 24z M3446 2726 c-88 -87 69 -324 253 -383 68 -22 85 -7 79 73 -15 182 -245 398 -332 310z M4215 2743 c-125 -32 -285 -300 -235 -394 27 -50 182 29 275 141 118 142 95 287 -40 253z M2928 1473 c-49 -12 20 -162 82 -181 14 -4 409 -7 879 -7 l853 0 32 37 c100 116 89 141 -65 150 -122 7 -1752 8 -1781 1z"/></symbol>
+<symbol id="g-chameleon" viewBox="0 0 734 590"><path transform="translate(0,590) scale(.1,-.1)" d="M5123 5888 c-22 -28 -58 -184 -89 -383 -48 -319 -38 -301 -131 -248 -209 121 -484 261 -573 291 -473 162 -604 202 -654 202 -35 0 -60 -22 -136 -120 -56 -73 -48 -71 -180 -44 -140 29 -333 61 -418 70 l-64 6 -51 -53 c-29 -30 -80 -95 -115 -146 -34 -51 -68 -96 -75 -100 -6 -4 -128 -8 -269 -8 -307 0 -268 20 -377 -196 l-77 -154 -54 -8 c-76 -10 -357 -56 -400 -65 -48 -10 -69 -53 -144 -293 l-36 -115 -58 -23 c-68 -27 -123 -48 -174 -67 -79 -29 -124 -47 -147 -58 -27 -12 -69 -75 -185 -276 -44 -74 -102 -175 -131 -225 -196 -339 -316 -626 -469 -1125 -134 -439 -140 -542 -61 -1140 62 -475 63 -478 250 -720 314 -407 513 -632 595 -675 21 -11 257 -72 449 -116 305 -70 679 -114 757 -89 196 63 756 397 846 505 100 120 258 756 258 1038 0 112 -64 231 -254 472 -143 182 -163 202 -218 228 -149 70 -191 88 -278 122 -52 20 -111 42 -130 50 -52 21 -227 72 -291 86 -48 10 -64 9 -110 -6 -58 -19 -314 -148 -340 -171 -8 -8 -18 -14 -22 -14 -23 0 -250 -172 -280 -213 -64 -87 -137 -420 -137 -627 0 -85 27 -137 145 -283 140 -172 151 -180 286 -210 295 -67 302 -66 517 41 101 50 139 81 149 121 3 14 10 31 14 37 9 12 40 109 60 191 13 55 -4 114 -68 229 -55 98 -199 140 -321 95 -89 -34 -101 -51 -71 -98 13 -21 32 -56 43 -78 10 -22 25 -53 33 -68 20 -37 13 -50 -42 -81 -69 -38 -179 -35 -218 7 -101 105 -110 168 -51 355 41 128 39 126 192 200 146 71 182 82 228 66 21 -8 46 -14 55 -14 22 0 219 -74 277 -104 94 -48 292 -315 292 -393 0 -71 -48 -271 -105 -433 -20 -58 -39 -116 -42 -129 -21 -86 -473 -321 -618 -321 -185 0 -630 114 -698 178 -80 75 -326 393 -408 527 l-24 40 0 305 c1 312 3 347 52 615 16 93 18 96 118 240 166 237 584 653 675 671 14 2 45 11 70 19 143 44 486 117 705 150 199 30 209 26 245 -100 15 -55 99 -265 131 -326 4 -10 20 -46 34 -80 32 -77 113 -250 175 -374 l45 -90 105 -7 c77 -4 759 -11 908 -8 14 0 17 36 3 45 -6 3 -20 27 -33 53 -50 103 -270 272 -353 272 -9 0 -24 4 -34 10 -10 5 -65 19 -122 30 -124 26 -124 26 -139 115 -45 279 -55 346 -65 462 -6 65 -4 73 14 83 82 43 1097 27 1144 -19 4 -4 -19 -62 -52 -127 -75 -150 -131 -282 -131 -310 0 -25 246 -302 517 -584 l82 -85 511 -3 c585 -3 539 -13 464 99 -114 172 -292 269 -559 304 -46 7 -56 13 -130 89 -137 139 -230 256 -218 275 25 40 208 369 222 399 20 43 34 41 119 -23 340 -255 367 -269 506 -261 56 3 187 11 291 16 266 15 560 56 640 88 127 52 485 296 485 331 0 4 -87 15 -192 24 -315 29 -503 51 -783 93 -253 38 -190 44 468 44 563 0 605 1 619 18 23 26 28 48 18 79 -6 15 -25 78 -44 138 -19 61 -44 135 -56 165 -12 30 -25 66 -30 80 -17 53 -68 170 -143 330 -44 95 -63 124 -109 165 -85 79 -645 495 -665 495 -3 0 -43 26 -87 58 -211 151 -556 358 -761 457 -262 126 -293 137 -312 113z m1202 -922 c386 -83 524 -548 245 -826 -163 -163 -407 -202 -614 -99 -208 102 -310 309 -266 539 51 270 345 449 635 386z M6230 4699 c-193 -116 -156 -405 56 -434 213 -28 339 232 191 393 -55 60 -181 81 -247 41z"/></symbol>
+<symbol id="g-seal" viewBox="0 0 783 693"><path transform="translate(0,693) scale(.1,-.1)" d="M7210 6901 c-41 -16 -131 -52 -200 -81 -341 -142 -315 -134 -540 -150 -300 -21 -537 -98 -777 -254 -197 -127 -566 -639 -645 -895 -11 -36 -26 -84 -33 -106 -16 -50 -50 -177 -88 -330 -73 -288 -145 -543 -250 -875 -54 -175 -378 -574 -532 -657 -22 -11 -60 -32 -85 -45 -93 -50 -185 -101 -195 -108 -5 -4 -55 -31 -110 -60 -197 -104 -241 -128 -293 -159 -56 -33 -132 -74 -272 -149 -47 -25 -102 -56 -122 -69 -21 -12 -40 -23 -43 -23 -2 0 -39 -20 -81 -45 -41 -25 -77 -45 -80 -45 -2 0 -38 -20 -80 -45 -41 -25 -77 -45 -79 -45 -8 0 -369 -221 -465 -285 -178 -118 -486 -540 -715 -980 -148 -284 -121 -254 -260 -294 -159 -46 -446 -141 -570 -188 -152 -58 -695 -454 -695 -506 0 -9 37 -12 143 -10 288 6 1011 24 1327 34 l325 10 30 33 c17 19 86 128 155 242 155 259 143 247 228 239 630 -55 1102 -85 1412 -92 l285 -6 75 57 c122 93 279 236 340 311 71 88 206 275 243 338 51 87 59 58 27 -103 -20 -102 -36 -161 -72 -260 -11 -30 -24 -68 -29 -85 -5 -16 -38 -89 -73 -161 -76 -156 -43 -129 -416 -344 -399 -230 -627 -397 -844 -618 -100 -102 -131 -96 339 -71 762 39 1412 99 1497 137 195 86 662 552 699 697 4 16 18 62 32 100 35 101 74 233 102 345 9 36 23 88 31 116 8 28 14 70 14 93 0 23 6 101 14 174 8 73 22 224 30 337 9 113 23 284 31 380 9 96 16 191 18 210 9 142 78 -135 133 -540 26 -187 26 -709 1 -800 -10 -36 -25 -89 -33 -117 -15 -58 -39 -140 -61 -218 -8 -27 -21 -63 -29 -78 -8 -16 -14 -37 -14 -47 0 -24 201 -216 324 -310 l97 -74 127 -8 c220 -15 1317 -15 1317 0 0 20 -143 169 -244 253 -62 52 -154 113 -265 176 -228 129 -325 192 -360 234 -72 84 -183 381 -217 579 -28 161 -28 153 -7 200 11 25 26 61 34 80 9 19 19 44 24 55 21 48 130 349 175 480 13 38 48 157 65 220 4 17 15 55 24 85 34 121 46 171 74 315 66 329 63 427 -22 880 -9 44 -23 118 -31 165 -9 47 -23 121 -31 165 -19 99 -38 215 -53 320 -6 44 -16 110 -21 147 -17 118 -13 183 26 413 16 89 47 226 63 275 4 14 16 52 26 85 9 33 23 78 30 100 7 22 20 64 30 94 9 30 36 85 61 123 91 141 132 205 183 288 29 47 70 113 91 147 77 122 77 192 0 413 -77 221 -117 249 -270 191z m-130 -476 c19 -22 -250 -300 -422 -435 -72 -58 -164 -136 -203 -175 -38 -38 -112 -99 -163 -135 -51 -36 -124 -89 -163 -117 -126 -94 -120 -72 31 111 141 172 184 215 355 358 77 64 165 140 195 168 30 28 112 89 182 136 70 47 130 90 133 95 9 14 41 11 55 -6z m-677 -51 c59 -10 57 -28 -9 -95 -73 -74 -167 -138 -257 -173 -105 -42 -112 -38 -110 60 3 184 125 252 376 208z m828 -100 c8 -10 10 -20 3 -29 -60 -86 -242 -337 -289 -398 -33 -43 -77 -101 -97 -130 -52 -71 -340 -377 -355 -377 -20 0 -16 11 32 85 25 39 70 120 100 181 30 61 62 118 71 125 23 19 208 258 225 290 8 15 66 73 129 130 63 56 121 111 128 121 16 22 35 23 53 2z"/></symbol>
+<symbol id="g-zebra" viewBox="0 0 740 775"><path transform="translate(0,775) scale(.1,-.1)" d="M3916 7671 c-266 -370 -372 -717 -347 -1143 l8 -153 48 -90 c26 -49 51 -94 55 -100 4 -5 22 -37 40 -70 76 -138 248 -377 269 -373 14 3 103 125 181 248 23 36 66 103 95 150 30 47 72 119 92 160 l38 75 0 270 c-1 287 -12 386 -56 482 -10 23 -19 45 -19 48 0 8 -95 200 -139 280 -94 171 -178 294 -202 295 -3 0 -31 -35 -63 -79z M5017 7404 c-192 -105 -413 -293 -403 -341 15 -67 27 -233 33 -430 10 -372 -14 -438 -327 -923 -61 -94 -100 -166 -100 -184 0 -14 52 -130 150 -331 33 -66 63 -132 69 -147 16 -44 41 -36 41 12 0 22 7 82 16 132 10 58 14 117 10 156 -5 63 -5 64 65 203 38 77 76 142 83 145 7 3 48 -15 91 -40 42 -25 79 -46 82 -46 3 0 24 -12 47 -27 22 -16 59 -37 81 -48 21 -11 75 -56 120 -99 53 -53 98 -87 135 -104 97 -43 267 -133 337 -179 29 -19 61 -49 72 -66 27 -46 251 -605 251 -629 0 -6 42 -60 93 -122 51 -61 131 -160 177 -221 46 -60 129 -164 185 -230 204 -241 325 -395 325 -415 0 -37 -457 -494 -509 -508 -20 -6 -58 -17 -86 -25 -191 -56 -295 -86 -325 -92 -68 -14 -108 -36 -118 -63 -19 -50 -102 -364 -102 -386 0 -12 150 -224 209 -296 20 -25 104 -135 186 -244 191 -255 156 -236 440 -236 327 1 467 12 511 42 66 45 325 414 459 653 94 168 88 151 81 250 -4 50 -9 166 -13 258 l-6 169 -84 106 c-47 59 -118 145 -158 192 -143 165 -631 737 -727 850 -53 63 -153 179 -221 258 -81 93 -130 158 -142 188 -18 47 -195 417 -283 592 -26 51 -60 109 -75 127 -27 33 -458 363 -685 525 -57 40 -106 78 -108 85 -3 6 36 72 86 146 50 73 120 181 154 239 l63 105 7 130 c8 146 -20 759 -40 893 -7 45 -28 41 -147 -24z M3205 6834 c-27 -8 -90 -26 -140 -40 -112 -33 -278 -97 -370 -144 -82 -41 -75 -9 -56 -285 7 -99 17 -195 22 -212 21 -65 -10 -63 -55 3 -68 101 -230 294 -247 294 -10 0 -41 -13 -67 -30 -27 -16 -52 -30 -55 -30 -41 0 -496 -361 -497 -394 0 -19 37 -75 183 -271 49 -66 92 -126 94 -132 6 -15 -28 -18 -42 -4 -11 9 -302 139 -398 177 l-58 23 -73 -77 c-154 -162 -394 -475 -384 -500 2 -8 69 -66 274 -240 21 -19 58 -48 81 -64 64 -47 32 -65 -57 -33 -23 8 -54 15 -67 15 -14 0 -55 7 -92 15 -70 15 -154 31 -235 46 -28 5 -56 4 -65 -1 -21 -11 -151 -269 -226 -450 -31 -74 -62 -148 -69 -165 -8 -16 -25 -61 -39 -100 -72 -199 -72 -197 0 -213 56 -13 127 -31 238 -62 44 -12 93 -25 109 -29 16 -4 31 -11 33 -17 4 -11 -57 -30 -277 -89 -249 -66 -268 -77 -289 -155 -6 -25 -25 -94 -41 -155 -54 -203 -80 -310 -125 -510 -9 -38 -22 -97 -30 -130 -83 -348 -89 -419 -30 -381 11 7 34 16 50 20 32 7 150 50 200 72 98 43 217 84 225 79 7 -4 1 -23 -15 -51 -108 -184 -337 -642 -352 -704 -6 -25 -27 -101 -48 -170 -20 -69 -41 -138 -45 -155 -4 -16 -20 -70 -34 -120 -68 -236 -129 -462 -130 -485 -1 -23 6 -26 114 -56 281 -78 646 -178 890 -244 85 -23 259 -71 385 -106 266 -74 554 -154 705 -194 58 -16 118 -33 134 -40 76 -29 60 -5 -315 466 -271 340 -424 534 -518 659 -46 60 -148 191 -226 290 -345 440 -395 504 -444 569 -28 38 -51 73 -51 78 0 16 75 177 272 588 195 408 192 402 268 414 19 4 58 17 85 30 74 37 77 21 16 -96 l-54 -102 12 -80 c7 -45 25 -148 42 -231 31 -158 47 -242 74 -390 9 -49 23 -119 30 -155 8 -36 22 -108 32 -160 l17 -95 131 -135 c72 -74 153 -160 179 -190 157 -176 620 -657 1311 -1364 226 -230 413 -423 416 -429 19 -29 36 5 43 85 14 173 25 520 17 541 -5 12 -76 105 -157 207 -81 102 -191 239 -243 305 -52 66 -138 172 -191 235 -53 63 -114 138 -136 166 -36 47 -110 140 -365 455 -52 64 -163 199 -248 301 -88 105 -159 201 -167 224 -8 21 -32 91 -54 154 -22 63 -69 201 -105 305 -36 105 -115 337 -175 516 -69 208 -119 341 -138 370 -16 24 -44 72 -62 106 l-33 62 49 78 c170 273 370 551 414 574 59 32 190 16 190 -22 0 -6 -23 -45 -51 -86 l-51 -76 12 -61 c6 -34 17 -88 25 -121 7 -33 21 -96 30 -140 9 -44 23 -105 30 -135 7 -30 21 -89 30 -130 9 -41 22 -100 30 -130 15 -60 35 -156 60 -290 9 -47 22 -110 30 -140 7 -30 21 -91 29 -135 57 -278 47 -256 225 -517 57 -84 165 -243 240 -353 74 -110 176 -260 226 -333 49 -73 124 -184 165 -247 41 -63 99 -149 129 -192 30 -43 106 -154 168 -248 153 -227 145 -225 163 -45 6 63 17 182 26 264 8 81 16 151 19 155 2 4 5 41 6 82 l3 75 -56 85 c-31 46 -109 161 -173 254 -64 94 -188 276 -274 405 -157 234 -264 392 -356 525 -27 39 -59 85 -72 104 -12 18 -25 49 -29 70 -8 50 -57 254 -105 446 -23 88 -45 176 -49 195 -5 19 -31 125 -59 235 -29 110 -56 218 -61 240 -10 47 -54 226 -75 305 -8 30 -16 70 -19 88 -5 29 -36 104 -72 174 -8 14 -14 35 -14 46 0 12 -4 24 -10 27 -25 15 -3 50 98 156 173 184 264 268 290 269 44 0 194 125 212 176 11 30 48 60 165 133 38 24 93 58 120 76 52 33 168 55 181 34 3 -6 -13 -30 -36 -55 -46 -50 -47 -63 -18 -214 6 -30 14 -75 18 -100 7 -42 41 -208 74 -365 8 -38 22 -101 30 -140 26 -128 48 -229 67 -310 10 -44 21 -98 24 -120 25 -150 36 -112 170 575 7 36 22 110 33 165 44 210 49 177 -58 370 -53 96 -132 229 -146 245 -18 22 -89 160 -123 239 -39 92 -62 253 -66 471 -4 200 0 194 -100 164z M2846 5493 c-22 -32 -56 -78 -77 -103 -49 -61 -51 -68 -30 -157 17 -69 43 -229 57 -348 3 -22 9 -62 14 -90 5 -27 16 -99 25 -160 9 -60 22 -150 30 -200 13 -86 28 -194 60 -437 42 -327 48 -352 95 -428 17 -26 96 -164 104 -180 4 -8 12 -24 19 -35 7 -11 34 -60 62 -110 46 -84 113 -201 135 -235 6 -8 13 -22 17 -30 4 -8 66 -114 138 -235 72 -121 134 -227 138 -235 4 -8 15 -27 25 -42 9 -14 39 -63 65 -107 48 -79 87 -108 87 -63 0 9 13 58 29 107 16 50 39 124 51 165 12 41 35 114 51 163 36 108 36 116 1 159 -84 106 -103 143 -91 174 21 52 77 304 112 504 12 64 54 187 103 295 7 17 22 55 34 85 11 30 25 64 30 75 5 11 39 92 75 180 36 88 70 169 75 180 57 122 78 210 61 243 -6 9 -25 51 -45 92 -19 41 -53 115 -75 163 -23 49 -41 90 -41 92 0 2 -35 75 -77 163 -43 87 -82 169 -88 182 -27 65 -28 56 -75 -480 -6 -74 -21 -171 -32 -215 -11 -44 -26 -107 -34 -140 -7 -33 -27 -112 -43 -175 -41 -156 -38 -144 -60 -240 -11 -47 -34 -141 -50 -210 -16 -69 -37 -159 -46 -200 -8 -41 -22 -104 -30 -140 -8 -36 -17 -86 -21 -112 -5 -36 -10 -48 -24 -48 -9 0 -30 21 -48 48 -16 26 -53 80 -82 121 -67 97 -74 111 -94 206 -10 44 -24 112 -32 150 -9 39 -22 99 -30 135 -9 36 -22 94 -31 130 -8 36 -21 88 -28 115 -7 28 -20 86 -30 130 -9 44 -21 96 -25 115 -5 19 -18 80 -30 135 -42 200 -51 241 -65 295 -7 30 -21 91 -30 135 -9 44 -23 106 -31 137 -8 32 -14 68 -14 81 0 32 -112 251 -130 255 -9 1 -32 -22 -54 -55z M4786 5111 c-4 -6 6 -46 22 -89 17 -42 47 -122 67 -177 93 -252 104 -260 475 -360 36 -10 85 -23 110 -30 87 -26 150 -39 156 -33 5 6 -119 382 -142 428 -30 61 -163 128 -384 195 -25 7 -70 21 -100 30 -30 9 -73 20 -95 25 -22 4 -54 11 -71 15 -20 4 -34 3 -38 -4z M4743 4268 c-24 -28 -182 -292 -285 -478 -111 -201 -165 -317 -182 -395 -16 -72 -96 -407 -120 -505 -8 -30 -17 -62 -20 -71 -11 -26 30 -45 225 -108 110 -35 101 -45 128 124 85 519 73 484 256 740 212 297 237 325 288 325 45 0 257 -21 447 -45 63 -8 157 -19 209 -25 99 -11 86 -6 331 -142 135 -76 213 -118 218 -118 2 0 27 -13 54 -30 77 -48 80 -34 8 48 -27 31 -95 111 -150 177 -192 227 -247 277 -326 299 -38 10 -89 24 -114 31 -25 7 -79 20 -120 29 -41 9 -102 23 -135 31 -108 24 -264 57 -430 91 -44 8 -106 22 -137 30 -83 20 -121 18 -145 -8z M5228 3513 c-25 -17 -76 -86 -246 -333 -62 -89 -68 -105 -128 -300 -34 -113 -68 -220 -74 -238 -10 -28 -10 -36 1 -46 19 -18 232 -77 283 -79 46 -2 32 -31 126 261 l53 163 83 104 c92 113 84 109 229 130 22 3 69 12 105 20 36 7 119 21 185 30 66 9 155 23 198 31 42 8 93 14 112 14 51 0 45 25 -12 53 -27 13 -86 45 -133 73 -47 27 -114 63 -150 81 l-65 31 -235 6 c-129 4 -251 9 -270 12 -24 3 -44 -1 -62 -13z"/></symbol>
+<symbol id="g-giraffe" viewBox="0 0 563 854"><path transform="translate(0,854) scale(.1,-.1)" d="M2088 8524 c-80 -19 -133 -48 -188 -104 -136 -135 -124 -259 39 -412 96 -91 86 -53 106 -398 9 -140 20 -313 25 -385 16 -226 22 -200 -77 -313 -49 -55 -134 -154 -191 -221 -57 -66 -107 -121 -111 -121 -5 0 -55 44 -112 98 -311 294 -450 410 -508 423 -112 26 -1014 -4 -1057 -35 -31 -23 364 -744 499 -912 59 -73 81 -83 190 -91 86 -5 562 12 597 23 9 2 85 80 169 173 175 195 182 199 342 208 97 6 99 6 274 -46 17 -5 44 -12 61 -16 71 -14 117 -114 144 -310 37 -264 50 -350 80 -540 21 -130 35 -221 65 -430 32 -225 41 -172 -74 -418 -22 -49 -41 -90 -41 -91 0 -2 -26 -59 -59 -127 -111 -236 -123 -264 -132 -324 -15 -100 9 -283 47 -358 19 -37 334 -359 379 -387 104 -64 464 -60 554 7 119 88 381 387 381 436 0 14 7 59 16 101 36 175 24 224 -138 556 -58 118 -115 238 -127 265 -12 28 -29 63 -36 78 -19 37 -19 140 0 270 9 56 22 152 31 212 8 61 21 153 29 205 7 52 21 149 30 215 9 66 22 156 30 200 7 44 21 132 30 195 28 184 65 235 192 265 43 10 100 24 127 33 54 16 179 12 264 -10 50 -12 129 -84 295 -269 l86 -96 235 -13 c284 -16 443 -10 491 20 74 46 232 297 470 745 26 50 63 118 81 152 19 35 31 69 28 77 -16 43 -1036 64 -1112 23 -41 -22 -319 -265 -455 -397 -126 -121 -119 -118 -160 -73 -105 116 -311 353 -333 384 l-24 36 9 194 c6 107 15 266 21 354 6 88 14 202 17 254 l5 95 88 85 c155 152 169 266 49 396 -164 178 -479 179 -621 3 -80 -99 -77 -205 8 -332 80 -120 75 -104 59 -171 -7 -33 -21 -98 -29 -145 -45 -242 -111 -559 -118 -564 -10 -9 -429 -13 -434 -4 -8 13 -21 63 -40 163 -9 44 -22 114 -31 155 -21 108 -61 324 -80 436 -4 26 2 42 35 85 121 163 122 304 2 412 -93 85 -247 117 -392 81z m1102 -4182 c85 -69 -2 -290 -143 -363 -71 -37 -92 -25 -95 54 -8 173 151 379 238 309z m-628 -25 c122 -93 190 -357 92 -357 -38 0 -128 65 -170 121 -121 165 -63 343 78 236z M1380 5960 c-31 -19 186 -454 240 -482 37 -19 423 -28 434 -10 3 5 -2 51 -10 103 -8 52 -18 118 -23 147 -5 33 -16 61 -31 77 -58 61 -277 131 -470 150 -36 4 -79 10 -96 15 -17 4 -37 4 -44 0z M4150 5954 c-392 -63 -520 -118 -535 -229 -3 -28 -13 -84 -21 -126 -8 -42 -14 -90 -14 -107 l0 -32 200 0 c258 0 259 1 332 152 50 103 98 207 98 213 0 2 12 29 26 60 24 50 27 87 7 84 -4 -1 -46 -8 -93 -15z M1673 5148 c12 -52 70 -173 175 -364 199 -365 252 -437 252 -352 0 18 7 60 14 93 26 108 39 254 25 271 -6 8 -99 85 -206 170 -106 86 -196 160 -199 165 -3 5 -19 16 -36 25 -30 16 -31 16 -25 -8z M3910 5139 c-19 -17 -109 -90 -200 -164 -250 -202 -233 -170 -197 -370 35 -188 40 -206 50 -202 11 3 57 71 74 107 3 8 16 31 28 50 12 19 41 71 65 115 24 44 52 96 63 115 44 77 174 338 179 358 9 32 -19 28 -62 -9z M2176 3468 c-2 -7 -9 -58 -16 -113 -6 -55 -18 -154 -26 -220 -52 -430 -104 -1060 -88 -1074 5 -4 81 -5 168 -2 l159 6 38 45 c21 25 94 117 164 205 l125 159 0 248 c0 171 3 249 11 254 14 8 204 9 217 0 5 -3 13 -52 16 -108 6 -101 23 -271 32 -336 4 -27 12 -36 42 -49 20 -8 55 -23 77 -33 53 -24 283 -121 367 -155 37 -14 72 -23 78 -20 12 8 12 91 0 215 -5 52 -14 171 -20 265 -5 93 -14 210 -19 260 -6 49 -16 146 -22 215 -7 69 -15 152 -18 184 -8 77 -17 78 -88 13 -111 -103 -212 -185 -251 -206 -68 -36 -333 -50 -494 -26 -121 18 -135 28 -385 256 -33 31 -61 37 -67 17z M2881 2197 c-94 -103 -270 -325 -271 -340 0 -10 7 -34 16 -55 8 -20 24 -64 35 -97 11 -33 25 -69 30 -80 5 -11 13 -33 18 -50 5 -16 19 -55 31 -85 12 -30 25 -66 30 -80 5 -14 18 -50 30 -80 12 -30 25 -66 30 -80 5 -14 23 -63 40 -110 18 -47 37 -100 43 -119 6 -18 20 -39 32 -47 17 -11 284 -117 440 -174 28 -10 115 -44 195 -74 198 -76 188 -81 166 72 -9 59 -23 170 -31 247 -9 77 -22 178 -30 225 -7 47 -21 137 -30 200 -9 63 -23 153 -30 200 -8 47 -16 105 -20 130 -14 104 -22 120 -78 145 -75 33 -195 90 -410 194 -217 105 -198 100 -236 58z M2148 1761 c-79 -4 -142 -11 -148 -17 -11 -11 -30 -90 -50 -204 -9 -52 -16 -92 -55 -300 -9 -47 -22 -121 -30 -165 -7 -44 -21 -120 -30 -170 -9 -49 -23 -128 -30 -175 -8 -47 -28 -164 -44 -260 -61 -349 -72 -422 -67 -435 11 -31 590 -26 607 5 5 8 27 60 50 115 23 55 57 134 76 175 19 41 44 98 54 125 11 28 24 59 29 70 5 11 26 63 45 115 20 52 42 109 50 127 8 17 15 38 15 46 0 9 5 19 11 23 15 9 -6 142 -29 178 -3 6 -39 106 -78 221 -163 480 -189 540 -228 533 -6 -1 -73 -4 -148 -7z M2926 608 c-43 -69 -296 -584 -292 -595 6 -15 1191 -19 1215 -4 12 7 11 24 -4 107 -10 55 -21 121 -25 147 -8 58 -3 55 -155 110 -66 25 -190 71 -275 102 -169 63 -431 155 -442 155 -4 0 -14 -10 -22 -22z"/></symbol>
+<symbol id="g-snake" viewBox="0 0 663 705"><path transform="translate(0,705) scale(.1,-.1)" d="M3615 7025 c-38 -14 -79 -29 -90 -35 -49 -25 -323 -122 -391 -139 -21 -5 -120 -32 -219 -59 -99 -27 -222 -60 -273 -73 -54 -13 -112 -34 -136 -50 -36 -24 -362 -292 -376 -308 -3 -4 -59 -54 -125 -111 -204 -178 -279 -257 -313 -330 -31 -68 -120 -279 -154 -365 -10 -27 -23 -59 -28 -70 -11 -26 -63 -184 -84 -256 -27 -93 -24 -110 51 -337 19 -57 38 -114 43 -125 36 -95 47 -121 112 -267 11 -25 26 -58 33 -75 85 -191 98 -203 385 -362 306 -169 329 -179 530 -229 102 -25 205 -51 230 -58 25 -8 74 -21 110 -31 36 -9 85 -23 110 -31 25 -7 68 -20 95 -27 322 -93 565 -177 774 -268 122 -53 126 -55 173 -119 76 -102 168 -295 168 -351 0 -39 -324 -230 -581 -342 -111 -48 -182 -69 -284 -86 -33 -5 -125 -21 -205 -35 -80 -13 -275 -45 -435 -71 -330 -53 -647 -108 -750 -130 -144 -32 -320 -78 -329 -86 -27 -25 395 -389 473 -408 298 -74 656 -137 1156 -202 597 -79 1446 56 1862 297 65 38 175 210 332 519 217 426 216 422 146 795 -76 409 -52 359 -280 586 -331 330 -407 387 -590 448 -60 20 -123 41 -140 47 -85 28 -238 78 -295 96 -89 29 -541 160 -615 180 -73 19 -145 39 -205 57 -25 8 -97 28 -160 46 -313 86 -412 122 -461 166 -8 8 -19 14 -23 14 -14 0 -163 115 -225 174 -94 91 -107 121 -91 221 28 185 70 279 146 333 214 151 332 219 417 242 62 17 102 7 460 -111 246 -82 220 -80 562 -33 138 19 367 59 515 89 36 7 103 21 150 30 47 10 113 26 148 37 l63 20 40 79 c42 85 57 98 92 81 12 -7 60 -25 107 -40 287 -97 301 -103 393 -167 215 -149 289 -198 417 -276 74 -45 150 -93 169 -105 35 -23 57 -23 47 1 -8 22 -236 338 -267 370 -30 32 -38 63 -16 69 6 2 46 11 87 21 41 9 113 28 160 42 47 14 102 29 123 33 82 16 74 45 -15 54 -35 4 -117 13 -183 21 -66 8 -221 22 -344 31 -129 9 -237 21 -255 29 -17 7 -80 29 -141 49 -236 76 -240 78 -239 111 1 17 18 87 39 158 20 70 35 133 32 141 -5 14 -104 57 -342 149 -287 112 -313 121 -560 194 -27 8 -72 21 -100 29 -75 22 -391 104 -460 120 -81 18 -89 17 -170 -11z m520 -402 c181 -54 445 -184 445 -219 0 -8 -12 -19 -27 -25 -16 -6 -51 -21 -80 -35 -138 -65 -286 -55 -341 23 -36 52 -139 258 -134 271 5 15 55 10 137 -15z M2004 3550 c-442 -28 -1016 -157 -1237 -277 -114 -63 -387 -421 -634 -833 -132 -221 -133 -223 -133 -342 0 -286 67 -871 112 -976 39 -92 432 -425 793 -672 44 -30 105 -72 135 -93 110 -77 276 -184 310 -201 42 -21 107 -29 625 -75 66 -6 165 -16 220 -21 55 -5 181 -14 280 -20 99 -6 191 -13 205 -15 150 -27 890 -24 1170 5 304 32 533 61 790 100 59 8 236 39 350 60 40 8 85 23 145 50 11 5 43 18 70 30 67 28 73 31 210 95 66 31 161 75 210 97 50 22 213 101 363 175 339 168 312 140 449 473 8 19 18 44 23 55 18 41 42 101 50 125 138 427 138 419 57 590 -165 350 -315 554 -526 713 -74 57 -83 55 -113 -15 -112 -264 -443 -830 -543 -930 -71 -71 -529 -252 -794 -314 -600 -139 -1029 -147 -1846 -34 -662 92 -826 119 -863 142 -124 76 -686 470 -726 508 -29 29 -22 98 25 230 22 63 43 124 46 135 4 11 12 29 20 40 7 11 13 26 13 33 0 49 61 89 185 122 39 10 113 30 165 43 210 56 591 129 790 152 30 3 78 10 105 15 28 6 115 19 195 31 80 11 279 45 443 75 l299 54 164 83 c135 67 164 85 162 102 -7 49 -407 218 -748 314 -41 12 -88 26 -105 31 -42 13 -263 71 -305 80 -98 22 -150 33 -205 46 -77 19 -247 25 -401 14z"/></symbol>
+<symbol id="g-crocodile" viewBox="0 0 832 389"><path transform="translate(0,389) scale(.1,-.1)" d="M7738 3869 c-14 -13 -72 -79 -127 -146 -94 -114 -107 -125 -174 -157 -167 -78 -207 -96 -301 -136 -54 -23 -106 -46 -115 -50 -9 -5 -59 -25 -111 -45 -52 -19 -103 -40 -112 -45 -10 -6 -24 -10 -33 -10 -8 0 -29 -6 -47 -14 -18 -8 -78 -28 -133 -45 -55 -17 -114 -36 -130 -41 -214 -68 -311 -69 -618 -9 -106 20 -268 3 -552 -57 -38 -9 -80 -17 -92 -20 -30 -6 -124 -117 -305 -361 -58 -78 -78 -96 -153 -138 -45 -25 -53 -26 -85 -15 -55 18 -254 102 -265 112 -29 25 -53 11 -209 -126 -135 -118 -115 -118 -341 -1 -144 74 -196 96 -212 91 -13 -4 -84 -72 -160 -152 -75 -79 -146 -147 -158 -150 -20 -5 -62 11 -213 82 -40 19 -78 34 -86 34 -7 0 -16 3 -20 7 -16 17 -94 40 -108 32 -8 -4 -75 -80 -148 -169 -152 -182 -137 -175 -267 -129 -222 77 -275 92 -292 82 -9 -5 -64 -81 -123 -169 -59 -87 -115 -164 -125 -171 -20 -13 -66 -4 -228 42 -118 33 -117 34 -210 -101 -99 -144 -100 -144 -199 -144 -278 0 -413 160 -365 432 22 121 27 136 94 253 25 44 55 100 67 123 23 47 6 35 383 277 41 27 59 37 92 55 26 15 694 416 748 450 94 59 198 120 204 120 11 0 52 46 46 52 -3 2 -31 -1 -62 -8 -32 -7 -101 -20 -153 -29 -91 -16 -159 -29 -315 -62 -165 -34 -212 -45 -250 -55 -22 -6 -67 -17 -100 -24 -56 -12 -182 -46 -300 -79 -50 -14 -130 -42 -320 -110 -55 -20 -113 -40 -130 -45 -190 -55 -216 -74 -422 -308 -288 -328 -374 -446 -387 -533 -4 -24 -13 -75 -21 -114 -28 -145 -65 -392 -86 -583 -16 -143 -26 -121 215 -472 162 -237 123 -215 651 -356 74 -20 151 -23 399 -14 84 2 141 0 143 -5 1 -6 -27 -46 -63 -90 -36 -44 -93 -116 -127 -160 l-62 -80 3 -170 c4 -195 5 -201 36 -209 66 -16 1451 -1 1454 16 10 50 -153 231 -257 287 -70 37 -193 81 -228 81 -13 0 -26 6 -29 14 -9 23 327 424 361 431 169 34 1285 59 1285 28 -1 -10 -48 -81 -105 -158 -118 -158 -120 -163 -71 -244 18 -31 45 -76 58 -101 51 -92 162 -286 185 -322 l23 -38 650 0 c574 0 651 2 656 15 16 42 -171 239 -281 297 -83 43 -303 108 -367 108 -23 0 -24 33 -1 51 9 8 52 59 97 114 44 55 112 136 151 181 38 44 86 100 106 125 l36 44 99 6 c252 17 888 6 1194 -21 63 -5 198 -16 300 -25 102 -9 241 -22 310 -30 69 -9 229 -26 355 -40 127 -14 282 -32 345 -40 193 -27 341 -45 426 -51 l80 -7 38 33 c42 37 138 153 180 217 l28 42 -28 48 c-83 145 -197 323 -208 323 -7 0 -44 -46 -83 -103 -90 -130 -92 -132 -145 -121 -34 7 -45 16 -59 44 -10 19 -43 88 -74 152 -58 120 -79 143 -103 111 -16 -22 -107 -135 -146 -180 -59 -69 -92 -44 -183 143 -41 84 -80 155 -87 157 -6 3 -56 -44 -110 -104 -101 -111 -110 -117 -163 -99 -32 12 -34 14 -83 125 -60 133 -104 215 -114 215 -6 0 -59 -47 -116 -106 -92 -92 -108 -104 -132 -100 -30 6 -336 125 -453 176 -11 5 -42 19 -70 31 -133 57 -328 151 -372 179 -39 24 -41 35 -9 52 13 7 160 104 326 216 166 111 310 202 319 202 9 0 48 -20 85 -45 38 -25 71 -45 73 -45 2 0 17 -10 33 -21 32 -25 60 -19 60 11 0 20 18 99 46 196 8 28 14 60 14 71 0 18 57 73 76 73 6 0 90 -65 104 -80 3 -3 29 -24 58 -47 57 -45 79 -46 88 -4 3 14 12 49 19 76 32 120 45 176 45 198 0 29 24 53 69 68 33 12 33 11 125 -80 90 -90 121 -107 132 -73 3 9 12 33 19 52 8 19 32 95 55 168 35 109 46 135 65 142 13 5 26 14 30 19 16 27 47 8 104 -66 125 -162 125 -162 167 -58 14 33 29 69 34 80 5 11 23 56 40 100 17 44 36 90 41 103 5 12 20 27 33 32 13 5 27 14 31 19 17 29 45 9 76 -51 54 -108 111 -198 124 -198 24 0 285 505 285 549 0 31 -68 167 -116 232 -49 67 -80 76 -275 85 -164 7 -165 7 -191 -17z m-1986 -945 c20 -10 52 -27 72 -38 34 -17 51 -56 25 -56 -5 0 -48 -18 -93 -40 -183 -87 -327 -113 -334 -61 -22 155 179 274 330 195z"/></symbol>
+<symbol id="g-hippo" viewBox="0 0 680 708"><path transform="translate(0,708) scale(.1,-.1)" d="M1455 7074 c-356 -36 -612 -362 -539 -687 42 -187 167 -342 345 -429 86 -43 230 -88 278 -88 30 0 35 -19 13 -43 -21 -23 -71 -119 -347 -662 -92 -181 -183 -359 -202 -395 -203 -381 -197 -362 -189 -658 8 -273 17 -417 28 -427 8 -8 16 -5 68 26 19 12 118 70 220 130 102 60 192 114 200 119 39 26 221 108 270 123 169 51 2719 64 3465 18 148 -9 239 -39 377 -123 330 -202 398 -244 436 -269 77 -52 73 -70 93 336 17 342 29 297 -183 715 -452 890 -522 1027 -545 1058 -28 37 -23 52 15 52 110 1 327 100 431 196 409 378 151 1005 -414 1006 -417 1 -659 -275 -643 -733 4 -91 2 -149 -4 -149 -5 0 -34 11 -64 25 -30 14 -57 25 -60 25 -3 0 -29 11 -57 24 -29 13 -74 34 -102 46 -27 11 -59 25 -70 30 -67 29 -109 30 -881 30 -784 0 -794 0 -851 -21 -76 -28 -124 -49 -265 -113 -42 -20 -89 -38 -103 -42 l-27 -7 8 59 c68 513 -238 874 -701 828z m3594 -1953 c19 -12 11 -38 -56 -201 -149 -360 -159 -370 -383 -377 -180 -6 -168 -22 -146 193 22 229 41 270 139 294 18 5 46 13 62 19 62 21 268 70 315 74 19 2 40 4 45 5 6 1 16 -2 24 -7z m-3122 -22 c48 -11 102 -24 118 -30 17 -5 64 -19 105 -31 81 -23 144 -72 153 -119 12 -59 39 -326 36 -349 l-4 -25 -145 1 c-156 1 -197 12 -247 67 -19 19 -83 144 -83 160 0 3 -13 35 -30 70 -49 106 -101 250 -96 264 8 19 90 16 193 -8z M2285 3864 c-343 -7 -615 -18 -650 -24 -78 -15 -116 -35 -510 -272 -669 -403 -745 -458 -800 -582 -25 -57 -129 -363 -164 -486 -168 -580 -185 -689 -127 -835 33 -81 129 -275 175 -353 17 -29 31 -55 31 -58 0 -3 15 -29 34 -57 18 -29 63 -97 99 -153 98 -152 213 -234 437 -314 36 -13 70 -26 75 -30 6 -4 36 -15 67 -24 56 -16 98 -66 98 -116 0 -5 4 -18 10 -28 5 -9 16 -33 24 -52 191 -452 187 -445 224 -463 40 -20 4133 -17 4175 3 29 14 43 41 125 235 108 256 152 365 152 375 0 12 59 50 78 50 48 0 373 152 448 209 106 81 439 658 498 863 22 77 -1 204 -95 533 -12 39 -23 79 -26 90 -3 11 -17 58 -30 105 -14 47 -34 117 -44 155 -24 86 -107 333 -121 360 -51 100 -185 203 -536 416 -68 41 -135 82 -150 91 -15 10 -36 22 -47 27 -11 5 -37 21 -58 35 -21 14 -40 26 -43 26 -3 0 -17 8 -32 19 -29 19 -234 140 -317 186 -94 52 -113 54 -902 70 -854 17 -1279 17 -2098 -1z m2849 -667 c134 -93 63 -337 -146 -502 -244 -193 -374 -178 -324 39 73 310 328 562 470 463z m-3348 7 c122 -51 232 -188 327 -406 29 -67 33 -178 7 -210 -58 -74 -225 4 -398 186 -97 102 -132 177 -132 282 l0 77 45 44 c51 49 85 55 151 27z m523 -2436 c4 -13 9 -61 10 -108 1 -47 6 -128 11 -180 15 -157 13 -208 -9 -220 -23 -12 -819 -14 -838 -2 -13 8 -31 49 -43 97 -4 17 -18 66 -30 110 -75 274 -76 261 22 269 126 10 763 51 836 55 25 1 34 -4 41 -21z m2401 7 c52 -3 154 -10 225 -15 72 -6 206 -15 298 -21 208 -13 201 -10 192 -66 -15 -102 -104 -388 -126 -406 -25 -20 -775 -26 -827 -6 l-25 10 7 117 c3 64 9 173 12 242 9 162 9 163 87 156 34 -3 105 -8 157 -11z"/></symbol>
+<symbol id="g-lion" viewBox="0 0 757 806"><path transform="translate(0,806) scale(.1,-.1)" d="M3010 8049 c-122 -33 -227 -63 -305 -88 -49 -16 -124 -39 -165 -51 -255 -75 -513 -164 -518 -178 -2 -6 13 -18 33 -26 117 -49 319 -193 458 -326 113 -108 116 -115 45 -106 -368 45 -1195 60 -1238 21 -57 -50 -554 -703 -715 -939 -44 -65 -84 -124 -90 -131 -5 -8 -7 -17 -4 -20 5 -5 255 13 424 30 78 8 275 -6 275 -19 0 -7 -44 -50 -97 -96 -54 -47 -146 -128 -204 -180 -58 -52 -135 -120 -170 -150 -256 -221 -548 -502 -554 -533 -3 -17 -10 -63 -15 -102 -10 -79 -32 -233 -54 -375 -8 -52 -20 -131 -26 -175 -6 -44 -15 -109 -20 -145 -5 -36 -12 -90 -16 -120 -3 -30 -10 -75 -15 -100 -5 -25 -13 -81 -18 -125 -5 -44 -12 -90 -16 -102 -9 -28 34 -34 55 -8 7 8 17 15 22 15 5 0 57 31 116 68 119 76 344 211 437 262 33 18 67 39 76 46 34 30 60 14 35 -21 -19 -27 -49 -84 -141 -260 -43 -82 -81 -154 -85 -160 -5 -5 -66 -122 -136 -260 -70 -137 -146 -285 -168 -327 l-39 -78 92 -182 c50 -101 119 -235 152 -298 33 -63 108 -207 166 -320 59 -113 120 -230 136 -260 16 -30 63 -120 105 -200 41 -80 78 -146 82 -148 16 -6 44 42 171 293 45 88 101 194 124 235 23 41 72 134 109 205 74 142 83 156 94 138 4 -6 2 -188 -5 -405 -6 -216 -13 -498 -15 -627 l-3 -235 180 -159 c502 -443 853 -740 869 -734 9 4 17 40 24 104 28 258 46 440 45 463 -3 70 27 49 342 -234 197 -178 613 -587 827 -813 58 -62 112 -113 121 -113 15 0 93 78 373 371 184 192 568 560 674 645 19 15 74 63 122 106 114 103 111 104 123 -32 3 -41 12 -124 20 -185 8 -60 19 -155 25 -210 13 -124 19 -130 73 -79 23 23 87 79 142 125 55 46 102 86 105 89 3 3 57 50 120 105 125 108 201 174 350 305 53 47 139 121 190 165 l93 80 -7 280 c-3 154 -11 440 -16 635 -9 316 -6 395 13 363 3 -4 41 -78 85 -163 44 -85 97 -189 119 -230 22 -41 66 -124 98 -185 142 -271 167 -315 175 -310 11 7 75 125 208 385 60 118 123 240 140 271 76 141 382 757 382 770 0 8 -4 19 -9 25 -8 9 -115 214 -260 499 -39 77 -83 163 -99 190 -15 28 -58 109 -96 180 -38 72 -78 142 -88 157 -33 48 -17 75 27 44 11 -7 52 -30 90 -51 39 -21 88 -50 110 -65 22 -15 128 -80 235 -145 107 -65 202 -124 211 -131 38 -33 50 -19 43 54 -5 61 -65 493 -100 722 -18 125 -42 291 -59 415 l-13 100 -84 79 c-84 80 -364 330 -718 644 -202 179 -219 196 -207 208 24 24 584 2 655 -27 72 -29 15 62 -327 521 -245 329 -426 560 -454 579 -50 35 -946 16 -1239 -26 -60 -8 -48 16 55 111 162 150 354 286 460 325 62 24 30 39 -333 155 -162 52 -539 165 -608 181 l-72 18 -63 -33 c-60 -31 -403 -257 -576 -380 -97 -69 -77 -72 -223 34 -170 122 -452 307 -543 355 -43 23 -53 24 -105 10z m-725 -1940 c4 -6 -2 -20 -13 -32 -10 -12 -76 -107 -145 -212 -69 -104 -147 -221 -174 -260 -27 -38 -71 -105 -98 -147 -48 -78 -71 -94 -81 -60 -3 9 -16 42 -29 72 -60 141 -124 378 -125 456 0 58 114 132 270 174 76 21 384 28 395 9z m705 -10 c356 -25 372 -30 530 -169 41 -36 98 -84 125 -105 28 -22 70 -57 94 -77 24 -21 49 -38 56 -38 6 0 98 74 204 165 219 187 212 183 289 196 59 10 522 49 580 49 39 0 77 -34 112 -101 11 -23 45 -78 74 -123 52 -80 216 -354 216 -361 0 -2 19 -36 43 -77 24 -40 46 -80 50 -88 4 -8 17 -31 28 -50 12 -19 32 -55 46 -80 13 -25 32 -59 42 -75 56 -94 301 -573 301 -587 0 -11 -40 -62 -151 -193 -41 -49 -133 -162 -204 -250 -71 -88 -196 -240 -277 -338 l-148 -177 0 -129 c0 -70 -3 -237 -7 -371 l-6 -244 -101 -110 c-56 -60 -123 -134 -150 -165 -70 -80 -65 -80 -201 -18 -66 30 -205 93 -310 140 -104 48 -219 101 -255 119 l-65 33 -9 183 c-6 126 -5 191 2 207 10 21 78 80 197 170 212 162 326 250 360 279 l40 35 -28 28 -27 28 -641 3 c-636 2 -641 2 -670 -18 -57 -41 -50 -48 375 -366 66 -49 137 -105 157 -124 l37 -35 -5 -185 c-2 -102 -6 -190 -8 -197 -5 -17 -325 -168 -575 -272 -69 -29 -140 -58 -158 -66 l-32 -15 -63 68 c-35 37 -106 113 -159 168 l-95 102 -6 258 c-4 141 -7 306 -7 365 0 138 22 100 -244 419 -531 637 -536 644 -536 674 1 68 511 979 827 1479 38 60 31 59 353 36z m2704 5 c75 -20 193 -77 241 -117 36 -29 36 -30 29 -86 -8 -74 -36 -185 -72 -296 -28 -86 -37 -108 -68 -182 -8 -17 -14 -36 -14 -42 0 -20 -29 -12 -41 12 -7 12 -78 120 -158 240 -80 120 -171 258 -202 307 -31 49 -68 105 -83 125 -15 19 -24 40 -21 45 11 17 319 12 389 -6z m-1688 -3563 c328 -146 508 -231 516 -244 4 -6 8 -91 8 -187 0 -195 -2 -201 -67 -241 -73 -43 -309 -193 -437 -276 -71 -47 -152 -98 -181 -114 l-52 -29 -102 62 c-242 149 -613 394 -622 410 -12 23 -25 314 -15 352 5 22 21 34 74 58 37 17 135 62 217 101 214 101 427 195 446 196 9 1 105 -39 215 -88z M2453 5154 c-19 -8 -16 -23 11 -63 13 -20 71 -113 129 -207 140 -225 140 -225 332 -244 126 -12 132 -15 150 -96 82 -371 90 -380 119 -129 30 259 45 377 55 455 6 41 11 83 11 92 1 61 -185 134 -442 173 -107 17 -344 29 -365 19z M4940 5154 c-295 -27 -563 -105 -597 -174 -13 -27 -12 -63 12 -240 20 -150 44 -346 51 -411 8 -73 19 -91 39 -65 8 11 15 29 15 41 0 12 6 41 14 66 7 24 21 80 31 124 28 133 22 127 162 146 160 22 185 35 248 131 244 377 237 364 214 379 -13 8 -111 10 -189 3z"/></symbol>
+</svg>
 <header>
-  <h1>Beasty <span>Bar</span></h1>
+  <h1>Beasty Bar</h1>
   <div class="hctl">
     <label class="ctl"><span class="lt">Opponent</span><span class="lts">vs</span> <select id="opp" aria-label="Opponent"></select></label>
     <span class="oppnote" id="oppnote"></span>
@@ -320,63 +309,55 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var
       <option value="alternate">alternate</option><option value="you">you</option><option value="ai">AI</option>
     </select></label>
   </div>
-  <button class="btn primary" id="newgame">New game</button>
-  <button class="btn" id="rulesbtn" aria-controls="rules" aria-expanded="false">Rules</button>
   <div class="spacer"></div>
   <div id="status" class="pill" role="status">connecting...</div>
+  <button class="btn primary" id="newgame">New game</button>
+  <button class="btn" id="rulesbtn" aria-controls="rules" aria-expanded="false">Rules</button>
 </header>
 <div class="notes" id="notes"></div>
 <main>
   <section aria-label="Table">
-    <div class="panel">
-      <div class="strip">
-        <div class="who"><b class="ai-c">AI</b><span class="score ai-c" id="aiscore">0</span><span class="meta">points</span></div>
-        <div class="group"><span class="lbl">Hand</span><div class="backs" id="aibacks"></div></div>
-        <div class="group"><span class="lbl">Deck</span><span id="aideck" class="meta"></span></div>
-        <div class="group"><span class="lbl">Not yet played (hand + deck)</span><div class="chips" id="aiunplayed"></div></div>
-      </div>
-      <div class="oppline" id="oppname"></div>
+    <div class="strip">
+      <div class="who ai"><b>AI</b><span class="score" id="aiscore">0</span><span class="meta">points</span></div>
+      <div class="group"><span class="lbl">Hand</span><div class="backs" id="aibacks"></div></div>
+      <div class="group"><span class="lbl">Deck</span><span id="aideck" class="meta"></span></div>
+      <div class="group"><span class="lbl">Not played yet (hand or deck)</span><div class="chips" id="aiunplayed"></div></div>
     </div>
+    <div class="oppline" id="oppname"></div>
 
     <div class="board" id="board">
       <div class="lane">
-        <div class="pile gate">
-          <div class="head"><h3>&#9733; Heaven's Gate</h3>
-            <div class="pts"><span class="you-c" id="barYou">0</span> you &middot; <span class="ai-c" id="barAi">0</span> AI</div></div>
-          <div class="sub">the bar: the front 2 enter when the queue reaches 5</div>
+        <div class="pile gate" role="group" aria-label="The bar (Heaven's Gate)">
+          <div class="head"><h3 title="Heaven's Gate: animals here score their points">Bar</h3>
+            <div class="pts"><b class="ai"><span class="sr">AI </span><span id="barAi">0</span></b><b class="you"><span class="sr">you </span><span id="barYou">0</span></b></div></div>
           <div class="minis" id="bar"></div>
         </div>
         <div class="queuebox">
-          <div class="queuehead"><span id="qlabel">&larr; front (bar entrance)</span><span>back &rarr;</span></div>
+          <div class="queuehead"><span id="qlabel">&larr; front</span><span>back &rarr;</span></div>
           <div class="queue" id="queue"></div>
           <div class="queue" id="slotnums" aria-hidden="true"></div>
         </div>
-        <div class="pile bounce">
-          <div class="head"><h3>&#10007; That's it</h3><span class="count" id="tcount"></span></div>
-          <div class="sub">bounced animals</div>
+        <div class="pile bounce" role="group" aria-label="Out (That's it): bounced animals">
+          <div class="head"><h3 title="That's it: bounced animals score nothing">Out</h3><span class="count" id="tcount"></span></div>
           <div class="minis" id="thatsit"></div>
         </div>
       </div>
     </div>
 
-    <div class="panel">
-      <div class="prompt" id="prompt" aria-live="polite"></div>
-      <div class="hand" id="hand" role="group" aria-label="Your hand"></div>
-      <div class="strip youstrip">
-        <div class="who"><b class="you-c">You</b><span class="score you-c" id="youscore">0</span><span class="meta">points</span></div>
-        <div class="group"><span class="lbl">Deck</span><span id="youdeck" class="meta"></span></div>
-        <div class="group"><span class="lbl">Still in your deck (order unknown)</span><div class="chips" id="youdeckset"></div></div>
-        <div class="spacer"></div>
-        <div class="meta" id="turninfo"></div>
-      </div>
+    <div class="prompt" id="prompt" aria-live="polite"></div>
+    <div class="hand" id="hand" role="group" aria-label="Your hand"></div>
+    <div class="strip youstrip">
+      <div class="who you"><b>You</b><span class="score" id="youscore">0</span><span class="meta">points</span></div>
+      <div class="group"><span class="lbl">Deck</span><span id="youdeck" class="meta"></span></div>
+      <div class="group"><span class="lbl">Still in your deck (order unknown)</span><div class="chips" id="youdeckset"></div></div>
+      <div class="spacer"></div>
+      <div class="meta" id="turninfo"></div>
     </div>
   </section>
 
   <aside class="side">
-    <div class="panel">
-      <h2>Moves</h2>
-      <div class="log" id="log"></div>
-    </div>
+    <h2>Moves</h2>
+    <div class="log" id="log"></div>
   </aside>
 </main>
 
@@ -385,8 +366,8 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var
     <h2 id="endtitle">Game over</h2>
     <div class="meta" id="endsub"></div>
     <div class="final">
-      <div><span class="meta">You</span><span class="score you-c" id="endyou">0</span></div>
-      <div><span class="meta">AI</span><span class="score ai-c" id="endai">0</span></div>
+      <div class="you"><span class="meta">You</span><span class="score" id="endyou">0</span></div>
+      <div class="ai"><span class="meta">AI</span><span class="score" id="endai">0</span></div>
     </div>
     <div class="row">
       <button class="btn primary" id="endnew">New game</button>
@@ -396,8 +377,8 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var
 </div>
 
 <div class="drawer" id="rules" role="dialog" aria-label="Rules">
-  <div style="display:flex;justify-content:space-between;align-items:center">
-    <h2 style="font-size:18px;color:var(--text);text-transform:none;letter-spacing:0;margin:0">Rules cheat sheet</h2>
+  <div class="top">
+    <h2>Rules</h2>
     <button class="btn" id="rulesclose">Close</button>
   </div>
   <h3>Setup</h3>
@@ -412,7 +393,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var
     <li><b>Recurring</b>: every hippo, crocodile and giraffe in the queue acts, front to back, each at most once per turn
       (a giraffe played this turn does not act again; a hippo or crocodile played this turn does).</li>
     <li><b>Five animals</b>: if the queue holds exactly 5, the front 2 enter the bar (Heaven's Gate) and the last one is
-      bounced (THAT'S IT).</li>
+      bounced out (That's it).</li>
     <li><b>Draw</b> the top card of your deck, if any.</li>
   </ol>
   <h3>Animals</h3>
@@ -443,9 +424,6 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var
 
 <script>
 "use strict";
-const EMOJI = {lion: "\u{1F981}", hippo: "\u{1F99B}", crocodile: "\u{1F40A}", snake: "\u{1F40D}", giraffe: "\u{1F992}",
-  zebra: "\u{1F993}", seal: "\u{1F9AD}", chameleon: "\u{1F98E}", monkey: "\u{1F412}", kangaroo: "\u{1F998}",
-  parrot: "\u{1F99C}", skunk: "\u{1F9A8}"};
 const ANIMALS = ["skunk", "parrot", "kangaroo", "monkey", "chameleon", "seal", "zebra", "giraffe", "snake", "crocodile",
   "hippo", "lion"];
 const STR = Object.fromEntries(ANIMALS.map((a, i) => [a, i + 1]));
@@ -488,6 +466,8 @@ const OFFLINE = "Can't reach the game server. Is python -m bbar.play still runni
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+// An animal's glyph, from the sprite at the top of the page.
+const glyph = (a, cls = "gl") => `<svg class="${cls}" aria-hidden="true"><use href="#g-${a}"/></svg>`;
 
 let S = null;          // last state from the server (never replaced by an older one)
 let sel = null;        // {animal, copyAt}: the move being built
@@ -507,11 +487,8 @@ function cardTitle(c) { return `${cap(c.animal)} (strength ${c.strength}, ${c.po
 
 function cardHTML(c, opts = {}) {
   const cls = ["card", c.owner, ...(opts.cls || [])].join(" ");
-  const inner = `<span class="band"><span class="str">${c.strength}</span></span><span class="ptc">${c.points}&#9733;</span>
-    <span class="emo" aria-hidden="true">${EMOJI[c.animal]}</span><span class="nm">${esc(c.animal)}</span>
-    <span class="kind">${KIND[c.animal] || ""}</span>` +
-    (opts.tip ? `<span class="tip">${esc(SHORT[c.animal])}</span>` : "") +
-    (opts.why ? `<span class="why">${esc(opts.why)}</span>` : "");
+  const inner = `<span class="str">${c.strength}</span><span class="dots" aria-hidden="true">${"<i></i>".repeat(c.points)}</span>` +
+    `${glyph(c.animal)}<span class="nm">${esc(c.animal)}</span>`;
   const label = esc(opts.label || cardLabel(c));
   if (opts.button) {
     return `<button type="button" class="${cls}" data-i="${opts.i}" data-fk="${opts.fk}" aria-label="${label}"
@@ -521,11 +498,11 @@ function cardHTML(c, opts = {}) {
 }
 function miniHTML(c, extra = "") {
   return `<div class="mini ${c.owner} ${extra}" role="img" aria-label="${esc(cardLabel(c))}" title="${esc(owner(c, true) + ", strength " + c.strength + ", " + c.points + " points")}">
-    <span class="s">${c.strength}</span><span class="emo" aria-hidden="true">${EMOJI[c.animal]}</span><span class="p">${c.points}</span></div>`;
+    <span class="s">${c.strength}</span>${glyph(c.animal)}</div>`;
 }
 function rich(text) {
   return esc(text).replace(/\{\{([yaYA]):([a-z,]+)\}\}/g, (m, t, list) => {
-    const animals = list.split(",").map(a => EMOJI[a] + " " + cap(a));
+    const animals = list.split(",").map(cap);
     const joined = animals.length === 1 ? animals[0] : animals.slice(0, -1).join(", ") + " and " + animals[animals.length - 1];
     const own = {y: "your ", Y: "Your ", a: "AI's ", A: "AI's "}[t];
     return `<span class="${t.toLowerCase() === "y" ? "nmy" : "nma"}">${own}${joined}</span>`;
@@ -656,11 +633,12 @@ function renderStrips() {
     `<span class="meta">empty</span>`;
   $("aibacks").setAttribute("aria-label", `${s.ai.hand_count} cards in the AI's hand`);
   $("aideck").textContent = s.ai.deck_count + " card" + (s.ai.deck_count === 1 ? "" : "s");
-  $("aiunplayed").innerHTML = s.ai.unplayed.map(a => `<span class="chip ai" title="${a}: strength ${STR[a]}, ${PTS[a]} points" aria-label="${a}"><span aria-hidden="true">${EMOJI[a]}</span><span class="cn"> ${a}</span></span>`).join("") ||
+  const chip = (a, who) => `<span class="chip ${who}" role="img" title="${a}: strength ${STR[a]}, ${PTS[a]} points" aria-label="${a}">${glyph(a, "cg")}<b aria-hidden="true">${STR[a]}</b></span>`;
+  $("aiunplayed").innerHTML = s.ai.unplayed.map(a => chip(a, "ai")).join("") ||
     `<span class="meta">none</span>`;
   $("youscore").textContent = s.you.score;
   $("youdeck").textContent = s.you.deck_count + " card" + (s.you.deck_count === 1 ? "" : "s");
-  $("youdeckset").innerHTML = s.you.deck.map(a => `<span class="chip you" title="${a}: strength ${STR[a]}, ${PTS[a]} points" aria-label="${a}"><span aria-hidden="true">${EMOJI[a]}</span><span class="cn"> ${a}</span></span>`).join("") ||
+  $("youdeckset").innerHTML = s.you.deck.map(a => chip(a, "you")).join("") ||
     `<span class="meta">empty</span>`;
   $("turninfo").textContent = (s.over ? `Game over after ${s.ply} moves` : `Move ${s.ply + 1}`) +
     ` · ${s.start === "you" ? "you" : "the AI"} started`;
@@ -679,8 +657,11 @@ function renderPiles() {
   $("thatsit").innerHTML = s.thats_it.map((c, i) => miniHTML(c, mark(i, nt, s.thats_it.length))).join("") +
     (pv ? pv.bounced.map(c => miniHTML(c, "new")).join("") : "");
   const n = s.thats_it.length + (pv ? pv.bounced.length : 0);
-  $("tcount").textContent = n ? `(${n})` : "";
-  for (const id of ["bar", "thatsit"]) {   // the newest cards in view
+  $("tcount").textContent = n || "";
+  newestInView();
+}
+function newestInView() {   // the piles and the log show their newest entries
+  for (const id of ["bar", "thatsit", "log"]) {
     const el = $(id);
     el.scrollTop = el.scrollHeight;
     el.scrollLeft = el.scrollWidth;
@@ -710,7 +691,7 @@ function renderQueue() {
   const targets = queueTargets();
   const last = chosen ? {animal: chosen.animal, who: "you"} : s.log.length ? s.log[s.log.length - 1] : null;
   const queue = chosen ? chosen.preview.queue : s.queue;
-  $("qlabel").innerHTML = chosen ? `<span class="pv">Preview: the queue after your move</span>` : "&larr; front (bar entrance)";
+  $("qlabel").innerHTML = chosen ? `<span class="pv">Preview: the queue after your move</span>` : "&larr; front";
   let html = "";
   for (let i = 0; i < 5; i++) {
     const c = queue[i];
@@ -725,7 +706,7 @@ function renderQueue() {
       html += `<div class="slot filled">${cardHTML(c, opts)}</div>`;
     } else if (i === 4) {
       const text = "5th animal: the front 2 enter the bar, this one is bounced";
-      html += `<div class="slot last" title="${text}"><span class="full">${text}</span><span class="short" aria-hidden="true">&#10007;</span></div>`;
+      html += `<div class="slot last" title="${text}"><span class="full">${text}</span><span class="short" aria-hidden="true">5th is out</span></div>`;
     } else {
       html += `<div class="slot"></div>`;
     }
@@ -741,7 +722,8 @@ function renderHand() {
   const mine = s.status === "your_turn" && !busy;
   $("hand").innerHTML = s.you.hand.map((c, i) => {
     const has = s.legal.some(m => m.animal === c.animal);
-    const cls = [], opts = {cls, i, tip: true};
+    const cls = [], opts = {cls, i};
+    let note = SHORT[c.animal];
     if (mine && has) {
       const on = !!(sel && sel.animal === c.animal);
       if (on) cls.push("selected");
@@ -750,11 +732,10 @@ function renderHand() {
         label: `${cardLabel(c)}: ${TIP[c.animal]} Key ${i + 1}.`});
     } else if (mine && !has) {
       cls.push("dead");
-      opts.why = DEAD[c.animal] || "no legal move now";
-      opts.tip = false;
-      opts.label = `${cardLabel(c)}: cannot be played now, ${opts.why}.`;
+      note = DEAD[c.animal] || "no legal move now";
+      opts.label = `${cardLabel(c)}: cannot be played now, ${note}.`;
     }
-    return `<div class="hslot">${cardHTML(c, opts)}</div>`;
+    return `<div class="hslot">${cardHTML(c, opts)}<span class="cap">${esc(note)}</span></div>`;
   }).join("") || `<span class="meta">No cards in hand.</span>`;
   $("hand").querySelectorAll("button.card.pick").forEach(el => {
     const c = s.you.hand[+el.dataset.i];
@@ -773,7 +754,7 @@ function renderPrompt() {
   const s = S, p = $("prompt");
   const off = offline ? `<div class="offline">${esc(OFFLINE)}</div>` : "";
   if (s.status === "error") {
-    p.innerHTML = off + `<div class="row"><span class="msg" style="color:#ff9c95">The AI failed: ${esc(s.error)}</span> <button class="btn primary" data-fk="pnew">New game</button></div>`;
+    p.innerHTML = off + `<div class="row"><span class="msg">The AI failed: ${esc(s.error)}</span> <button class="btn primary" data-fk="pnew">New game</button></div>`;
     p.querySelector("[data-fk=pnew]").onclick = newGame;
     return;
   }
@@ -785,7 +766,7 @@ function renderPrompt() {
     return;
   }
   if (pending) {
-    p.innerHTML = off + `<div class="row"><span class="think"><span class="spin"></span>Playing your ${esc(cap(pending.animal))}...</span></div>`;
+    p.innerHTML = off + `<div class="row"><span class="think you"><span class="spin"></span>Playing your ${esc(cap(pending.animal))}...</span></div>`;
     return;
   }
   if (s.status !== "your_turn") {
@@ -823,7 +804,7 @@ function renderPrompt() {
     $("cancel").onclick = cancel;
     return;
   }
-  p.innerHTML = off + lastMoveHTML() + `<div class="row"><span class="msg">Your turn: pick a card from your hand.</span><span class="meta hoverhint">Hover a card for its action.</span></div>`;
+  p.innerHTML = off + lastMoveHTML() + `<div class="row"><span class="msg">Your turn: pick a card.</span></div>`;
 }
 
 function renderLog() {
@@ -955,7 +936,7 @@ async function newGame() {
   onState();
 }
 
-window.addEventListener("resize", () => { const el = $("log"); el.scrollTop = el.scrollHeight; });
+window.addEventListener("resize", newestInView);
 setInterval(() => {   // smooth think timer between polls
   if (!thinkBase) return;
   const t = (thinkBase.secs + (performance.now() - thinkBase.at) / 1000).toFixed(1);
@@ -995,7 +976,7 @@ document.addEventListener("keydown", e => {
     if (j >= 0 && j < group.length) { e.preventDefault(); group[j].focus(); }
   }
 });
-$("ruletable").innerHTML = ANIMALS.slice().reverse().map(a => `<tr><td>${EMOJI[a]} <b>${cap(a)}</b>${KIND[a] ? ` <span class="meta">(${KIND[a]})</span>` : ""}</td>
+$("ruletable").innerHTML = ANIMALS.slice().reverse().map(a => `<tr><td>${glyph(a, "rg")}<b>${cap(a)}</b>${KIND[a] ? ` <span class="meta">(${KIND[a]})</span>` : ""}</td>
   <td class="c">${STR[a]}</td><td class="c">${PTS[a]}</td><td>${esc(TIP[a])}</td></tr>`).join("");
 
 api("/api/state").then(s => { accept(s); onState(); }).catch(() => { offline = true; renderStatus(); schedule(); });
