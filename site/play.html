@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Play · Beasty Bar AI</title>
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Crect width='10' height='14' rx='2' fill='%2338e0a4'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top"><b><a href="./">Beasty Bar AI</a></b><a href="./#animals">Rules</a><a href="https://github.com/diegooprime/beastybar-ai">GitHub</a></header>
+  <div class="play">
+    <div>
+      <div id="stage"></div>
+      <div class="act" id="act"></div>
+    </div>
+    <div class="side">
+      <div><div class="row2"><div class="seg" id="opp"></div><button class="btn" id="new">New game</button></div></div>
+      <div><h5>It could be holding</h5><div class="chips" id="could"></div></div>
+      <div><h5>Still in your deck</h5><div class="chips" id="mine"></div></div>
+      <div><h5 id="sawh">What it saw</h5><div class="opts" id="saw"></div></div>
+      <div><h5>Moves</h5><div class="log" id="log"></div></div>
+      <div class="note">This opponent is the search player: it samples the hands you could hold and looks 8 plies ahead, in your browser. The re-solving player needs its networks and runs locally with <code>python -m bbar.play</code>.</div>
+    </div>
+  </div>
+</div>
+<script type="module" src="play.js"></script>
+</body>
+</html>

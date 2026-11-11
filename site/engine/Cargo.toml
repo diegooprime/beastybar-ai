@@ -1,0 +1,19 @@
+[package]
+name = "bbweb"
+version = "0.1.0"
+edition = "2024"
+description = "Beasty Bar engine for the browser: bbcore behind a small C ABI, compiled to WebAssembly"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bbcore = { path = "../../core" }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+panic = "abort"
+strip = true

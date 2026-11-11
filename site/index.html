@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beasty Bar AI</title>
+<meta name="description" content="A program that learns the card game Beasty Bar by playing itself, then solves the second half of every game exactly.">
+<meta property="og:title" content="Beasty Bar AI">
+<meta property="og:description" content="Self-play, then exact solving. What a perfect opponent can gain from move 9 on: 0.126 down to 0.008.">
+<meta property="og:image" content="media/card-exploitability.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Crect width='10' height='14' rx='2' fill='%239d8cff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <b>Beasty Bar AI</b>
+    <a class="opt2" href="#animals">Game</a>
+    <a class="opt2" href="#strength">Strength</a>
+    <a class="opt2" href="#how">Method</a>
+    <a class="opt2" href="#found">Findings</a>
+    <a href="play.html">Play</a>
+    <a href="https://github.com/diegooprime/beastybar-ai">GitHub</a>
+  </header>
+
+  <div class="first">
+    <div>
+      <h1>A program that learns the card game Beasty Bar by playing itself, then solves the second half of every game exactly.</h1>
+      <dl class="facts">
+        <div><dt>0.126 <i>→</i> 0.008</dt><dd>what a perfect opponent can gain in win rate, taking over at move 9</dd></div>
+        <div><dt>83.5%</dt><dd>against the best network of my first attempt</dd></div>
+        <div><dt>62.9%</dt><dd>against the network it starts from</dd></div>
+        <div><dt>2,000 / 2,000</dt><dd>reference games reproduced move for move by the engine</dd></div>
+      </dl>
+      <div class="acts"><a class="btn go" href="play.html">Play against it</a><a class="btn" href="https://github.com/diegooprime/beastybar-ai">Code</a></div>
+    </div>
+    <div class="viewer" id="viewer">
+      <div id="stage"></div>
+      <div class="bar2">
+        <button class="ic" id="prev" aria-label="Previous move"><svg viewBox="0 0 12 12"><path d="M9 1v10L2 6z"/></svg></button>
+        <button class="ic" id="toggle" aria-label="Play or pause"><svg viewBox="0 0 12 12"><path id="pp" d="M3 1l8 5-8 5z"/></svg></button>
+        <button class="ic" id="next" aria-label="Next move"><svg viewBox="0 0 12 12"><path d="M3 1v10l7-5z"/></svg></button>
+        <div class="scrub" id="scrub" role="slider" aria-label="Move" tabindex="0"></div>
+        <span class="plyno" id="plyno"></span>
+        <select id="pick" aria-label="Game"></select>
+      </div>
+      <div class="under">
+        <div><h5 id="optsh">What the search saw</h5><div class="opts" id="opts"></div></div>
+        <div><h5>Moves</h5><div class="log" id="log"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <section id="animals">
+    <h2>Twelve animals queue for the bar</h2>
+    <p class="claim">You play one animal to the back of the queue and it acts. When five are queued, the front two get in and the last one is out. Points in the bar win.</p>
+    <div class="zoo" id="zoo"></div>
+    <div class="demo">
+      <div class="rule" id="rule"></div>
+      <div class="lane" id="lane"></div>
+    </div>
+  </section>
+
+  <section id="strength">
+    <div class="head">
+      <h2>Each generation beats the one before</h2><span class="sp"></span>
+      <div class="seg" id="refs"></div>
+    </div>
+    <p class="claim" id="ladderclaim"></p>
+    <div class="ladder" id="ladder"></div>
+    <div class="axis"><div></div><div id="lax"></div><div></div></div>
+    <div class="prov" id="prov"></div>
+  </section>
+
+  <section id="exploit">
+    <div class="head">
+      <h2>Then match scores stop moving, and exploitability keeps falling</h2><span class="sp"></span>
+      <div class="seg" id="plys"><button data-t="8" class="on">from ply 8</button><button data-t="9">from ply 9</button></div>
+    </div>
+    <p class="claim">An exact best response copies the player until that ply, then plays perfectly. Its score above 50% is the number: how much the strongest possible opponent could win back. It is a lower bound on the whole game; plies 0 to 7 are not measured yet.</p>
+    <div class="ladder" id="expl"></div>
+    <div class="axis"><div></div><div id="eax"></div><div></div></div>
+  </section>
+
+  <section id="how">
+    <h2>Four ways of deciding, by how much is still hidden</h2>
+    <p class="claim">The only secret is each player's hand: four of the animals they have not played yet. The bars count the hands the opponent could be holding. As they shrink, the player switches from a learned network to exact solving.</p>
+    <div class="legend" id="legend"></div>
+    <div class="rail" id="rail"></div>
+    <div class="how">
+      <div id="howtext"></div>
+      <dl class="kv" id="howkv"></dl>
+    </div>
+  </section>
+
+  <section id="found">
+    <h2>What the measurements said</h2>
+    <p class="claim">Every number is a line in <a href="https://github.com/diegooprime/beastybar-ai/blob/main/runs/results.jsonl">runs/results.jsonl</a> with its command, commit, seeds and 95% interval.</p>
+    <div class="finds" id="finds"></div>
+  </section>
+
+  <section id="run">
+    <h2>Run it</h2>
+    <p class="claim">The engine, the search players and this site need no network weights. The re-solving player needs its two networks, which are not in the repository.</p>
+<pre>git clone https://github.com/diegooprime/beastybar-ai && cd beastybar-ai
+python -m venv .venv && .venv/bin/pip install maturin numpy pytest
+VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release   <i># build the Rust engine</i>
+.venv/bin/python -m bbar.golden --engine core                 <i># rules check: 2000/2000 exact</i>
+.venv/bin/python -m bbar.arena pimc:w=128,d=8 greedy --deals 1000
+python3 -m http.server -d site 8000                           <i># this page, with the engine in WebAssembly</i></pre>
+  </section>
+
+  <footer>Unofficial fan project. Beasty Bar is a game by Stefan Kloß, published by Zoch Verlag: buy it, it is very good. The animal drawings here are original. Scoring is a house rule: points in the bar, not animals.</footer>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
