@@ -8,17 +8,18 @@
 <style>
   /* One game, full screen, for recording: stage.html?game=N (&speed=1.5). Space pauses. */
   html, body { height: 100%; }
-  body { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 56px; align-items: center; padding: 0 72px; overflow: hidden; }
-  #stage { max-width: 1300px; justify-self: center; }
-  .side2 h5 { margin: 0 0 14px; font: 500 16px var(--sans); color: var(--muted); }
-  .side2 .opt { grid-template-columns: 62px minmax(0, 150px) 1fr 58px; font-size: 17px; height: 34px; gap: 12px; }
+  body { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 48px; align-items: center; padding: 0 56px; overflow: hidden; }
+  .stage h4 { font-size: 16px; } .stage .sc { font-size: 24px; line-height: 34px; } .stage .who { font-size: 16px; } .stage .deck span { font-size: 16px; }
+  #stage { justify-self: stretch; }
+  .side2 h5 { margin: 0 0 16px; font: 500 19px var(--sans); color: var(--muted); }
+  .side2 .opt { grid-template-columns: 70px minmax(0, 170px) 1fr 62px; font-size: 20px; height: 40px; gap: 14px; }
   .side2 .opt .v { height: 9px; border-radius: 5px; } .side2 .opt .v i { border-radius: 5px; }
-  .side2 .opt .n { font-size: 15px; }
-  .side2 .chip { height: 28px; font-size: 15px; padding: 0 8px 0 6px; border-radius: 7px; } .side2 .chip svg { width: 18px; height: 18px; }
-  .side2 .opts { min-height: 240px; align-content: start; }
-  .cap { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--line); font: 500 20px/1.5 var(--sans); min-height: 120px; }
-  .cap small { display: block; font: 500 15px var(--mono); color: var(--muted); margin-bottom: 6px; }
-  .cap .chip { vertical-align: -7px; }
+  .side2 .opt .n { font-size: 17px; }
+  .side2 .chip { height: 32px; font-size: 17px; padding: 0 9px 0 7px; border-radius: 8px; } .side2 .chip svg { width: 21px; height: 21px; }
+  .side2 .opts { min-height: 270px; align-content: start; }
+  .cap { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--line); font: 500 23px/1.6 var(--sans); min-height: 150px; }
+  .cap small { display: block; font: 500 17px var(--mono); color: var(--muted); margin-bottom: 6px; }
+  .cap .chip { vertical-align: -8px; }
   .ticks { display: flex; gap: 3px; margin-top: 30px; }
   .ticks i { flex: 1; height: 8px; border-radius: 2px; background: var(--raise); }
   .ticks i.done.s0 { background: var(--a); } .ticks i.done.s1 { background: var(--b); }
@@ -34,13 +35,13 @@
 </div>
 <script type="module">
 import {load, decode, ANIMALS, animalOf} from "./engine.js";
-import {Stage, describe, chip} from "./board.js";
+import {Stage, describe, chip, optionLabel as label, valueText} from "./board.js";
 import {GAMES} from "./games.js";
 
 const q = new URLSearchParams(location.search), g = GAMES[+(q.get("game") || 0)];
 const AGENT = {pimc8: "Search, 8 plies", pimc4: "Search, 4 plies", greedy: "Greedy", random: "Random"};
 const $ = id => document.getElementById(id), sleep = ms => new Promise(r => setTimeout(r, ms));
-const engine = await load("bb.wasm"), stage = new Stage($("stage"), {names: g.p.map(k => AGENT[k])});
+const engine = await load("bb.wasm"), stage = new Stage($("stage"), {names: g.p.map(k => AGENT[k]), maxCard: 170});
 stage.speed = +(q.get("speed") || 1);
 let s = engine.newGame(g.seed, g.start), paused = false;
 const states = [s];
@@ -49,13 +50,6 @@ stage.set(states[0], {instant: true});
 $("ticks").innerHTML = g.moves.map((_, i) => `<i class="s${states[i].toMove}"></i>`).join("");
 addEventListener("keydown", e => { if (e.key === " ") paused = !paused; });
 
-function label(state, action) {
-  const m = decode(action), n = i => ANIMALS[animalOf(state.queue[i])];
-  if (m.animal === 1) return "bounce " + n(m.params[0]);
-  if (m.animal === 2 && m.params.length) return "hop " + m.params[0];
-  if (m.animal === 4) return "copy " + n(m.params[0]);
-  return ANIMALS[m.animal];
-}
 function options(i) {
   const st = states[i], vals = g.vals[i], chosen = g.moves[i], mover = st.toMove, rows = [];
   $("h").textContent = `Move ${i + 1}: what ${AGENT[g.p[mover]].toLowerCase()} sees`;
@@ -63,8 +57,9 @@ function options(i) {
   else rows.push([chosen, 0]);
   rows.sort((x, y) => y[1] - x[1]);
   const lo = Math.min(...rows.map(r => r[1])), hi = Math.max(...rows.map(r => r[1]));
-  $("opts").innerHTML = rows.slice(0, 6).map(([a, v]) => `<div class="opt s${mover} ${a === chosen ? "pick" : ""}">${chip(mover * 12 + decode(a).animal)}<span class="lbl">${label(st, a)}</span>` +
-    `<span class="v"><i style="width:${hi === lo ? 100 : 8 + 92 * (v - lo) / (hi - lo)}%"></i></span><span class="n">${(v > 0 ? "+" : "") + v.toFixed(1)}</span></div>`).join("");
+  const txt = valueText(rows.map(r => r[1]));
+  $("opts").innerHTML = rows.slice(0, 6).map(([a, v], k) => `<div class="opt s${mover} ${a === chosen ? "pick" : ""}">${chip(mover * 12 + decode(a).animal)}<span class="lbl">${label(st, a)}</span>` +
+    `<span class="v"><i style="width:${hi === lo ? 100 : 8 + 92 * (v - lo) / (hi - lo)}%"></i></span><span class="n">${vals ? txt[k] : ""}</span></div>`).join("");
 }
 document.documentElement.dataset.ready = "1";
 await sleep(900);

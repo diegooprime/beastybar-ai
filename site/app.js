@@ -1,5 +1,5 @@
 import {load, decode, encode, ANIMALS, POINTS, animalOf, ownerOf} from "./engine.js";
-import {Stage, describe, chip, cardHTML} from "./board.js";
+import {Stage, describe, chip, cardHTML, optionLabel, valueText} from "./board.js";
 import {GAMES} from "./games.js";
 import {DATA} from "./data.js";
 
@@ -12,14 +12,6 @@ const AGENT = {pimc8: "Search, 8 plies", pimc4: "Search, 4 plies", greedy: "Gree
 // ---- replay viewer -------------------------------------------------------------------------------------------
 const view = {g: null, states: [], at: 0, playing: false, token: 0};
 const stage = new Stage($("stage"));
-
-function optionLabel(state, action) {
-  const m = decode(action), q = state.queue, name = i => ANIMALS[animalOf(q[i])];
-  if (m.animal === 1) return "bounce " + name(m.params[0]);
-  if (m.animal === 2 && m.params.length) return "hop " + m.params[0];
-  if (m.animal === 4) return "copy " + name(m.params[0]) + (m.params.length === 2 ? (animalOf(q[m.params[0]]) === 1 ? ", bounce " + name(m.params[1]) : ", hop " + m.params[1]) : "");
-  return "";
-}
 
 function openGame(g, at = 0) {
   view.token++;
@@ -55,10 +47,11 @@ function paint() {
   else rows = [[chosen, null]];
   rows.sort((x, y) => y[1] - x[1]);
   const lo = Math.min(...rows.map(r => r[1])), hi = Math.max(...rows.map(r => r[1]));
-  $("opts").innerHTML = rows.slice(0, 6).map(([a, v]) => {
+  const txt = vals ? valueText(rows.map(r => r[1])) : [];
+  $("opts").innerHTML = rows.slice(0, 6).map(([a, v], k) => {
     const w = v === null ? 100 : hi === lo ? 100 : 8 + 92 * (v - lo) / (hi - lo);
-    return `<div class="opt s${mover} ${a === chosen ? "pick" : ""}">${chip(mover * 12 + decode(a).animal)}<span class="lbl">${optionLabel(s, a) || ANIMALS[decode(a).animal]}</span>` +
-      `<span class="v"><i style="width:${w}%"></i></span><span class="n">${v === null ? "" : (v > 0 ? "+" : "") + v.toFixed(1)}</span></div>`;
+    return `<div class="opt s${mover} ${a === chosen ? "pick" : ""}">${chip(mover * 12 + decode(a).animal)}<span class="lbl">${optionLabel(s, a)}</span>` +
+      `<span class="v"><i style="width:${w}%"></i></span><span class="n">${v === null ? "" : txt[k]}</span></div>`;
   }).join("") + (rows.length > 6 ? `<div class="opt"><span></span><span class="lbl">${rows.length - 6} more</span></div>` : "");
 }
 

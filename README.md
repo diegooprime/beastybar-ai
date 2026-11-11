@@ -1,5 +1,20 @@
 # Beasty Bar AI
 
+A program that plays the card game [Beasty Bar](https://www.zoch-verlag.com/zoch_en/brands/beasty-bar/): two players,
+hidden hands. It learns a policy by self-play, then replaces it with exact solving wherever what is left of the game
+is small enough: a depth-limited CFR solve with a value network at ply 8, the whole hidden-information game from
+ply 9, minimax once nothing is hidden. From ply 8 on, a perfect opponent gains 0.0077 in win rate against it, against
+0.126 for the network alone.
+
+[![A game between two search players, replayed move by move](docs/media/replay.gif)](https://diegooprime.github.io/beastybar-ai/)
+
+**[Results, replays and method](https://diegooprime.github.io/beastybar-ai/)** ·
+**[Play in the browser](https://diegooprime.github.io/beastybar-ai/play.html)** · [Mission](MISSION.md) ·
+[Plan](docs/PLAN.md) · [Rules](RULES.md) · [Evidence trail](runs/results.jsonl)
+
+> Unofficial fan project. Beasty Bar is a game by Stefan Kloß, published by Zoch Verlag: buy it. The animal drawings
+> here are original. Scoring is a house rule (points in the bar, not animals): [RULES.md](RULES.md).
+
 Start with [MISSION.md](MISSION.md): the goal, how to decide, and the constraints. The approach and why:
 [docs/PLAN.md](docs/PLAN.md). This file is the project's state: what exists, how to run it, the best player and its
 measured strength. Every number below is a line in [runs/results.jsonl](runs/results.jsonl) (command, commit, code
@@ -11,6 +26,8 @@ hash, seeds, 95% interval) or a `bbar.delta` run noted with it.
 (blueprint network for plies 0-7, a depth-limited CFR solve with value-network leaves at its ply-8 decision, the
 exact hidden-information window from ply 9, minimax once perfect-information). It is not yet strong in the
 mission's sense: plies 0-7 are still the blueprint's, and exploitability is measured only from ply 8 on.
+
+![Exploitability from ply 8 by generation of the player](docs/media/exploitability.png)
 
 | Player | vs blueprint final | vs `pimc:w=128,d=8` | Exploitability (lower bounds) |
 |---|---|---|---|
@@ -45,6 +62,8 @@ Scores: win 1, draw 0.5, loss 0, duplicate deal pairs: resolve rows 300-500 (c5-
 48 and c5m vs v3h 320: stopped at the compute deadline), 2000 for blueprint rows and PIMC d=8 vs the blueprint, 1000
 for `pimc:w=8,d=4` and the blueprint vs iter949, 20,000 for exploiters. Exploitability = best responder's score - 0.5.
 
+![How the player decides at each ply](docs/media/method.png)
+
 What we have learned:
 - **Hidden-hand play is where the strength is.** Knowing the opponent's hand scores 66.8% [65.6, 67.9] against the same
   PIMC without it; knowing the deck orders as well adds nothing (the full-state player scores 49.2% [48.1, 50.4]
@@ -75,6 +94,11 @@ What we have learned:
   as a certified bound); keep growing labels and nets, which has lowered error at every step so far.
 
 ## Play
+
+In the browser, against the search player (`pimc:w=128,d=8`, the engine compiled to WebAssembly, no server):
+[diegooprime.github.io/beastybar-ai/play.html](https://diegooprime.github.io/beastybar-ai/play.html).
+
+Against the best player, locally (it needs its two networks in `checkpoints/`):
 
     .venv/bin/python -m bbar.play --open        # http://127.0.0.1:8765, local only
 
@@ -118,6 +142,12 @@ games go to `runs/play/games.jsonl`.
   the base network before ply P0, a depth-limited CFR-D solve with value-net leaves at every own decision from P0
   (safe: carried opponent values in a gadget re-solve; plain: common-knowledge Bayes beliefs), the exact window from
   ply F, minimax once perfect-information (best player above).
+- **Site** (`site/`, published by `.github/workflows/pages.yml`): the engine behind a small C ABI compiled to
+  WebAssembly (`site/engine/`, `site/bb.wasm`: positions, views and search are `bbcore`'s), replays of real games,
+  the rules as live demos, the results from the evidence trail, and a page to play the search player.
+  `scripts/site_data.py` builds `site/data.js` from `runs/*.jsonl`; `scripts/site_games.mjs` plays the replay
+  games; `scripts/site_media.mjs` renders the share cards (`site/media/`) and the README figures and clip
+  (`docs/media/`) from the site itself.
 - **Pod tools**: `scripts/pod.sh` (create, set up, sync, run, back up, guard the balance), `scripts/podqueue.py`
   (start queued jobs on pods as they go idle), `scripts/gather.sh` (collect label shards onto a hub pod),
   `scripts/delta_pool.py` (pool `bbar.delta` runs across seeds and pods, paired comparisons).
@@ -136,5 +166,9 @@ games go to `runs/play/games.jsonl`.
     .venv/bin/python -m bbar.value.e2 --net checkpoints/value/NAME/best.pt     # E2 (scripts/e2.sh)
     scripts/cascade.sh NAME DATA --net checkpoints/value/NAME/best.pt          # value labels down to ply 0 (pods)
 
-Pods: `scripts/pod.sh` (up, setup, sync, push, bg, pull, down). Networks and data are not in git: checkpoints/ and
-data/ are on the laptop; the full label sets and per-pod outputs are in backups/<pod id>/ (gitignored).
+    scripts/build_site.sh [--games]                               # site: bb.wasm, data.js (and new replay games)
+    python3 -m http.server -d site 8000                           # the site, locally
+    node scripts/site_media.mjs                                   # share cards, README figures, replay clip
+
+Pods: `scripts/pod.sh` (up, setup, sync, push, bg, pull, down). Networks and data are not in git: `checkpoints/`,
+`data/` and `backups/<pod id>/` (the full label sets and per-pod outputs) are gitignored.

@@ -1,6 +1,6 @@
 // Play against the search player. You are seat 1 (mint, bottom); the AI is seat 0 and sees only its own view.
 import {load, decode, encode, ANIMALS, animalOf, ownerOf} from "./engine.js";
-import {Stage, describe, chip, glyph} from "./board.js";
+import {Stage, describe, chip, valueText} from "./board.js";
 
 const $ = id => document.getElementById(id);
 const ME = 1, AI = 0;
@@ -147,10 +147,11 @@ async function aiTurn() {
   const rows = Object.entries(r.values).map(([a, v]) => [+a, v]).sort((x, y) => y[1] - x[1]);
   const lo = Math.min(...rows.map(x => x[1])), hi = Math.max(...rows.map(x => x[1]));
   $("sawh").textContent = `What it saw: ${rows.length} option${rows.length === 1 ? "" : "s"}, ${r.ms} ms`;
-  $("saw").innerHTML = rows.slice(0, 5).map(([a, v]) => {
+  const txt = valueText(rows.map(x => x[1]));
+  $("saw").innerHTML = rows.slice(0, 5).map(([a, v], k) => {
     const w = hi === lo ? 100 : 8 + 92 * (v - lo) / (hi - lo), pick = a === r.action;
     return `<div class="opt s0 ${pick ? "pick" : ""}">${pick ? chip(AI * 12 + decode(a).animal) : `<span class="chip ghost">?</span>`}<span class="lbl">${pick ? ANIMALS[decode(a).animal] : "not played"}</span>` +
-      `<span class="v"><i style="width:${w}%"></i></span><span class="n">${(v > 0 ? "+" : "") + v.toFixed(1)}</span></div>`;
+      `<span class="v"><i style="width:${w}%"></i></span><span class="n">${txt[k]}</span></div>`;
   }).join("");
   g.log.push(await stage.move(before, r.action, after));
   if (g !== game) return;

@@ -43,10 +43,28 @@ export function describe(before, action, after) {
     gain: [after.scores[0] - before.scores[0], after.scores[1] - before.scores[1]]};
 }
 
+// A move the mover could make, in words (the card itself is shown beside it).
+export function optionLabel(state, action) {
+  const m = decode(action), q = state.queue, name = i => ANIMALS[animalOf(q[i])];
+  if (m.animal === 1) return "bounce " + name(m.params[0]);
+  if (m.animal === 2 && m.params.length) return "hop " + m.params[0];
+  if (m.animal === 4) return "copy " + name(m.params[0]) + (m.params.length === 2
+    ? (animalOf(q[m.params[0]]) === 1 ? ", bounce " + name(m.params[1]) : ", hop " + m.params[1]) : "");
+  return ANIMALS[m.animal];
+}
+
+// The search's values for a set of options, as text. Early in a game they are points (score margin plus the queue);
+// once it can see the end they carry +-1000 for a win or a loss, averaged over sampled worlds: shown as a win rate.
+export function valueText(values) {
+  if (values.length < 2) return values.map(() => "");   // a forced move was not searched
+  const decided = values.some(v => Math.abs(v) >= 50);
+  return values.map(v => decided ? Math.round(Math.max(0, Math.min(1, (v / 1000 + 1) / 2)) * 100) + "%" : (v > 0 ? "+" : "") + v.toFixed(1));
+}
+
 export class Stage {
   // el: a positioned container. reveal[p]: show player p's hand face up. bottom: the seat drawn at the bottom.
-  constructor(el, {reveal = [true, true], bottom = 0, names = ["", ""], onCard = null} = {}) {
-    Object.assign(this, {el, reveal, bottom, names, onCard, cards: [], state: null, run: 0, speed: 1});
+  constructor(el, {reveal = [true, true], bottom = 0, names = ["", ""], onCard = null, maxCard = 118} = {}) {
+    Object.assign(this, {el, reveal, bottom, names, onCard, maxCard, cards: [], state: null, run: 0, speed: 1});
     el.classList.add("stage");
     el.innerHTML = `<div class="zone bar"><h4>Bar</h4><div class="sc"><b class="s${1 - bottom}">0</b><b class="s${bottom}">0</b></div></div>` +
       `<div class="zone out"><h4>Out</h4></div><div class="slots">${"<i></i>".repeat(5)}</div>` +
@@ -71,7 +89,7 @@ export class Stage {
   measure() {
     const W = this.el.clientWidth || 800, side = W < 520 ? Math.max(52, W * 0.16) : W * 0.19, mid = W - 2 * side;
     const gap = Math.max(4, mid * 0.018);
-    const cw = Math.min(118, (mid - 4 * gap - 2 * gap) / 5), ch = cw * 1.4, vgap = Math.max(14, ch * 0.24);
+    const cw = Math.min(this.maxCard, (mid - 4 * gap - 2 * gap) / 5), ch = cw * 1.4, vgap = Math.max(14, ch * 0.24);
     const label = 22;
     const g = this.g = {W, side, mid, gap, cw, ch, vgap, label, y: [label, label + ch + vgap, label + 2 * (ch + vgap)],
       qx: side + (mid - 5 * cw - 4 * gap) / 2, ms: Math.max(0.36, Math.min(0.5, (side - 20) / (cw * 3.4)))};
