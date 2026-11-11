@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Share cards · Beasty Bar AI</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="style.css">
+<style>
+  /* 1600 x 900 images for posts (scripts/site_media.mjs screenshots each one). cards.html?c=NAME shows one. */
+  body { background: #000; }
+  .sheet { display: grid; gap: 24px; padding: 24px; justify-content: center; }
+  .cardimg { width: 1600px; height: 900px; background: var(--bg); padding: 64px 72px 0; position: relative; overflow: hidden;
+    display: flex; flex-direction: column; }
+  .cardimg h2 { font: 600 38px/1.2 var(--sans); letter-spacing: -.015em; margin: 0 0 12px; max-width: 26ch; }
+  .cardimg .sub { font: 400 22px/1.45 var(--sans); color: var(--soft); max-width: 60ch; margin: 0; }
+  .cardimg .body { flex: 1; display: flex; flex-direction: column; justify-content: center; min-height: 0; }
+  .cardimg .foot { display: flex; justify-content: space-between; align-items: center; height: 76px; border-top: 1px solid var(--line);
+    font: 500 18px var(--sans); color: var(--muted); }
+  .cardimg .foot b { color: var(--text); font-weight: 600; }
+  .cardimg .foot span { font-family: var(--mono); font-size: 16px; }
+  .big .row { grid-template-columns: 320px minmax(0, 1fr) 300px; height: 64px; font-size: 24px; gap: 28px; padding: 0; }
+  .big .track { height: 64px; } .big .track::before { top: 31.5px; }
+  .big .track .mid { top: 10px; bottom: 10px; }
+  .big .track .ci { top: 30px; height: 4px; }
+  .big .track .dot { top: 22px; width: 20px; height: 20px; margin-left: -10px; }
+  .big .row.best .dot { box-shadow: 0 0 0 6px color-mix(in srgb, var(--a) 25%, transparent); }
+  .big .row .num { font-size: 22px; } .big .row .nm2 small { font-size: 16px; margin-left: 10px; }
+  .big .axis { grid-template-columns: 320px minmax(0, 1fr) 300px; gap: 28px; padding: 6px 0 0; font-size: 16px; }
+  .big .axis div:nth-child(2) { height: 24px; }
+  .hero2 { display: flex; align-items: baseline; gap: 24px; font: 600 84px/1 var(--mono); letter-spacing: -.03em; margin-bottom: 36px; }
+  .hero2 i { font-style: normal; color: var(--faint); font-weight: 400; } .hero2 b { color: var(--a); font-weight: 600; }
+  .hero2 small { font: 400 22px/1.35 var(--sans); color: var(--muted); letter-spacing: 0; max-width: 22ch; }
+  .zoo2 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 18px; --cw: 186px; width: 1206px; margin: 0 auto; }
+  .zoo2 > div { position: relative; aspect-ratio: 5 / 7; }
+  .zoo2 .card { position: absolute; inset: 0; width: auto; }
+  .big .rail { gap: 6px; } .big .rail .p { height: 330px; }
+  .big .rail .p .hands { bottom: 62px; } .big .rail .p .hands b { font-size: 17px; top: -28px; }
+  .big .rail .p .band { bottom: 36px; height: 18px; border-radius: 4px; } .big .rail .p .no { font-size: 16px; }
+  .big .legend { font-size: 20px; gap: 34px; margin-bottom: 44px; } .big .legend i { width: 16px; height: 16px; border-radius: 4px; margin-right: 10px; }
+  .big .hb { grid-template-columns: 420px minmax(0, 1fr) 130px; font-size: 24px; min-height: 66px; gap: 28px; }
+  .big .hb .t { height: 18px; border-radius: 9px; } .big .hb .t i { border-radius: 9px; } .big .hb .n { font-size: 26px; }
+  .tablewrap { width: 1180px; margin: 0 auto; }
+</style>
+</head>
+<body>
+<div class="sheet" id="sheet"></div>
+<script type="module">
+import {load, ANIMALS} from "./engine.js";
+import {Stage, cardHTML} from "./board.js";
+import {GAMES} from "./games.js";
+import {DATA} from "./data.js";
+
+const P = Object.fromEntries(DATA.players.map(p => [p.id, p]));
+const pct = x => (x * 100).toFixed(1) + "%";
+const score = (a, b) => {
+  for (const m of DATA.matches) {
+    if (m.argmax) continue;
+    if (m.a === a && m.b === b) return m;
+    if (m.a === b && m.b === a) return {...m, score: 1 - m.score, lo: 1 - m.hi, hi: 1 - m.lo};
+  }
+};
+const frame = (name, title, sub, body) => `<div class="cardimg big" id="c-${name}"><h2>${title}</h2><p class="sub">${sub}</p><div class="body">${body}</div>` +
+  `<div class="foot"><b>Beasty Bar AI</b><span>github.com/diegooprime/beastybar-ai</span></div></div>`;
+
+const lo = Math.log10(0.004), hi = Math.log10(0.2), lx = v => (Math.log10(v) - lo) / (hi - lo) * 100;
+const ex = DATA.exploitability.filter(e => e.T === 8).sort((x, y) => y.mean - x.mean);
+const best = ex.at(-1), bp = ex[0];
+const exRows = ex.map(e => `<div class="row ${e.player === "c5-2" ? "best" : ""}"><span class="nm2">${P[e.player].name}</span><div class="track">` +
+  `<i class="ci" style="left:${lx(e.lo)}%;width:${lx(e.hi) - lx(e.lo)}%"></i><i class="dot" style="left:${lx(e.mean)}%"></i></div><span class="num">${e.mean.toFixed(4)}</span></div>`).join("");
+const exAxis = `<div class="axis"><div></div><div>${[0.005, 0.01, 0.02, 0.05, 0.1, 0.2].map(v => `<span style="left:${lx(v)}%">${v}</span>`).join("")}</div><div></div></div>`;
+
+const ladderIds = ["c5-2", "c5m", "v2c", "pimc8", "bp8k", "iter949"];
+const ladRows = ladderIds.map(id => { const m = score(id, "bp"); return `<div class="row ${id === "c5-2" ? "best" : ""}"><span class="nm2">${P[id].name}</span><div class="track"><i class="mid" style="left:50%"></i>` +
+  `<i class="ci" style="left:${m.lo * 100}%;width:${(m.hi - m.lo) * 100}%"></i><i class="dot" style="left:${m.score * 100}%"></i></div><span class="num">${pct(m.score)}</span></div>`; }).join("");
+const ladAxis = `<div class="axis"><div></div><div>${[0, 25, 50, 75, 100].map(v => `<span style="left:${v}%">${v}%</span>`).join("")}</div><div></div></div>`;
+
+const choose4 = n => (n < 4 ? 1 : n * (n - 1) * (n - 2) * (n - 3) / 24), hands = p => choose4(12 - Math.floor(p / 2));
+const kind = p => (p < 8 ? 0 : p === 8 ? 1 : p < 15 ? 2 : 3);
+const rail = `<div class="legend"><span><i class="k0"></i>Learned network, plies 0 to 7</span><span><i class="k1"></i>Depth-limited solve, ply 8</span><span><i class="k2"></i>Exact solve, plies 9 to 14</span><span><i class="k3"></i>Minimax, ply 15 on</span></div>` +
+  `<div class="rail">${Array.from({length: 24}, (_, p) => `<div class="p"><div class="hands" style="height:${Math.max(3, Math.sqrt(hands(p) / 495) * 230)}px"><b>${p % 2 === 0 && hands(p) > 1 ? hands(p) : ""}</b></div><div class="band k${kind(p)}"></div><div class="no">${p}</div></div>`).join("")}</div>`;
+
+const hb = (l, v, t, on) => `<div class="hb ${on ? "hi" : ""}"><span>${l}</span><span class="t"><i style="width:${v * 100}%"></i></span><span class="n">${t}</span></div>`;
+const s = (a, b) => score(a, b).score;
+
+const cards = {
+  exploitability: frame("exploitability", "How much can a perfect opponent still win?",
+    "An exact best response copies the player until ply 8, then plays perfectly. Its score above 50%, by generation of the player.",
+    `<div class="hero2"><span>${bp.mean.toFixed(3)}</span><i>→</i><b>${best.mean.toFixed(4)}</b><small>lower bound on the whole game: plies 0 to 7 are not measured yet</small></div>${exRows}${exAxis}`),
+  ladder: frame("ladder", "Score against the network it starts from",
+    "Duplicate deals with seats swapped, 95% intervals. The re-solver adds exact solving on top of the blueprint network.", ladRows + ladAxis),
+  method: frame("method", "Four ways of deciding, by how much is still hidden",
+    "The bars count the hands the opponent could be holding at each ply. As they shrink, the player switches from a learned network to exact solving.", rail),
+  hidden: frame("hidden", "Reading the opponent's hand is where the strength is",
+    "The same search, with and without seeing the other hand. Seeing the deck order as well adds nothing.",
+    hb("Search", s("pimc6", "pimc-hand6"), pct(s("pimc6", "pimc-hand6"))) + hb("Search that sees your hand", s("pimc-hand6", "pimc6"), pct(s("pimc-hand6", "pimc6")), true) +
+    hb("Sees everything, against sees the hand", s("cheat6", "pimc-hand6"), pct(s("cheat6", "pimc-hand6")))),
+  animals: frame("animals", "Twelve animals queue for the bar",
+    "Play one to the back of the queue and it acts. Five in the queue: the front two get in, the last one is out.",
+    `<div class="zoo2">${[11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map(a => `<div><div class="card s${a % 2}">${cardHTML(a + (a % 2) * 12)}</div></div>`).join("")}</div>`),
+  table: frame("table", "A program that plays Beasty Bar", "It learns by playing itself, then solves the second half of every game exactly.", `<div class="tablewrap"><div id="tbl"></div></div>`),
+};
+const only = new URLSearchParams(location.search).get("c");
+document.getElementById("sheet").innerHTML = Object.entries(cards).filter(([k]) => !only || k === only).map(([, v]) => v).join("");
+if (only) document.getElementById("sheet").style.cssText = "padding:0;gap:0";
+const tbl = document.getElementById("tbl");
+if (tbl) {
+  const e = await load("bb.wasm"), g = GAMES[0], st = new Stage(tbl, {names: ["Search, 8 plies", "Search, 8 plies"]});
+  let state = e.newGame(g.seed, g.start);
+  for (let i = 0; i < 13; i++) state = e.apply(g.moves[i]);
+  st.set(state, {instant: true});
+}
+document.documentElement.dataset.ready = "1";
+</script>
+</body>
+</html>

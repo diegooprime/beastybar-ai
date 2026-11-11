@@ -18,15 +18,15 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The published site is the static files only; the engine's Rust source stays in the repository.
       - run: |
           mkdir _site
           cp site/*.html site/*.js site/*.css site/*.wasm _site/
           if [ -d site/media ]; then cp -r site/media _site/media; fi
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
