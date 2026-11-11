@@ -781,7 +781,7 @@ function renderPrompt() {
     const sc = `You ${pv.score.you}${delta[0] ? ` (+${delta[0]})` : ""} &middot; AI ${pv.score.ai}${delta[1] ? ` (+${delta[1]})` : ""}`;
     p.innerHTML = off + `<div class="story">${rich(pv.rich.replace(/^You played /, "Play "))}</div>
       <div class="row"><button class="btn primary" id="confirm" data-fk="confirm">Play it</button><button class="btn" id="cancel" data-fk="cancel">Cancel</button>
-        <span class="kbd">Enter</span><span class="kbd">Esc</span><span class="spacer"></span>
+        <span class="spacer"></span>
         ${pv.over ? `<span class="meta">This move ends the game.</span>` : ""}<span class="meta">${sc}</span></div>`;
     $("confirm").onclick = confirmMove;
     $("cancel").onclick = cancel;
